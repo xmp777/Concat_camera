@@ -247,7 +247,7 @@ impl Studio {
                         shown = Some(frame);
                         studio.playhead = position.min(end);
                         let playhead = studio.playhead;
-                        studio.scene.follow_playhead(playhead, true);
+                        studio.scene_follow_playhead(playhead, true);
                         // The view follows: a playhead that runs off the
                         // right edge, or sits off the left, pages the lanes
                         // to it, the way every editor keeps the cut in view.
@@ -324,7 +324,7 @@ impl Studio {
         // A phone's lanes move under a playhead held at their middle.
         self.lanes.recentre(self.playhead);
         self.host.playback.seek(f64::from(self.playhead));
-        self.scene.follow_playhead(self.playhead, false);
+        self.scene_follow_playhead(self.playhead, false);
         self.request_preview();
     }
 

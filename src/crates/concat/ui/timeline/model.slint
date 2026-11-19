@@ -177,6 +177,10 @@ export enum TextAlignment { left, center, right }
 /// one per control.
 export enum ClipField {
     scale, offset-x, offset-y, rotation, stretch-x, stretch-y, opacity,
+    /// The scene clip's virtual camera, at the playhead mapped into the
+    /// clip. Rotation rides in degrees here - the camera keeps radians -
+    /// like the clip's own rotation row does.
+    camera-x, camera-y, camera-zoom, camera-rotation,
     volume, speed, preserve-pitch, fade-in, fade-out,
     flip-h, flip-v, blend, crop-left, crop-top, crop-right, crop-bottom,
     font-size, font-weight, italic, underline, strikethrough, text-case, text-opacity, align,
@@ -428,6 +432,13 @@ export struct SelectedClipData {
     stretch-x: float,
     stretch-y: float,
     opacity: float,
+
+    // camera — a scene clip: the project scene's camera at the playhead
+    // mapped into the clip, degrees for rotation
+    camera-x: float,
+    camera-y: float,
+    camera-zoom: float,
+    camera-rotation: float,
 
     // sound — everything but a still
     /// linear gain; the fader works in decibels and converts

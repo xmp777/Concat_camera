@@ -7,9 +7,126 @@ use super::*;
 impl Studio {
     // ── the inspector ──
 
+    /// The project's scene, as the document holds it; a scene-less project
+    /// reads as a scene of nothing, so the Camera tab has numbers to show
+    /// (and nothing to edit into).
+    fn project_scene(&self) -> concat_scene::Scene {
+        self.session
+            .as_ref()
+            .and_then(|session| {
+                session
+                    .project()
+                    .extra
+                    .get(concat_studio::SCENE_KEY)
+                    .and_then(|value| {
+                        serde_json::from_value::<concat_scene::Scene>(value.clone()).ok()
+                    })
+            })
+            .unwrap_or_else(|| {
+                concat_scene::Scene::new("", "", 1920.0, 1080.0, 1920, 1080)
+            })
+    }
+
+    /// The scene camera's pose at the playhead mapped into `clip`, for the
+    /// Camera tab's rows and the scene pane alike.
+    pub(super) fn scene_camera_pose_at(&self, clip: &model::Clip) -> concat_camera::VirtualCamera {
+        let scene = self.project_scene();
+        let local = (f64::from(self.playhead) - clip.start).clamp(0.0, clip.duration) * scene.fps();
+        scene.camera.pose_at(local)
+    }
+
+    /// One number on the Camera tab: a key on the scene's camera track at
+    /// the playhead mapped into the selected scene clip. The other fields
+    /// keep the pose the track evaluates - a zoom typed alone does not
+    /// move the lens - and the whole dial folds into one undo step, like
+    /// any knob's gesture.
+    fn scene_camera_set(
+        &mut self,
+        pose_of: impl FnOnce(concat_camera::VirtualCamera) -> concat_camera::VirtualCamera,
+    ) {
+        let Some(clip) = self
+            .edit_targets()
+            .first()
+            .and_then(|id| self.clip(id))
+            .cloned()
+        else {
+            return;
+        };
+        if clip.kind != model::ClipKind::Scene {
+            return;
+        }
+        let local = (f64::from(self.playhead) - clip.start).clamp(0.0, clip.duration)
+            * self.project_scene().fps();
+        let pose = pose_of(self.scene_camera_pose_at(&clip));
+        self.apply_within(
+            "scene-camera-inspector",
+            Command::SetSceneCameraKey {
+                frame: local,
+                x: Some(pose.x),
+                y: Some(pose.y),
+                zoom: Some(pose.zoom),
+                rotation: Some(pose.rotation),
+                easing: None,
+            },
+        );
+    }
+
+    /// The Camera tab's strip button: the key at the playhead comes off
+    /// the scene's camera track, as ClearClipKey takes a clip's own.
+    pub fn scene_camera_clear(&mut self) {
+        let Some(clip) = self
+            .edit_targets()
+            .first()
+            .and_then(|id| self.clip(id))
+            .cloned()
+        else {
+            return;
+        };
+        if clip.kind != model::ClipKind::Scene {
+            return;
+        }
+        let local = (f64::from(self.playhead) - clip.start).clamp(0.0, clip.duration)
+            * self.project_scene().fps();
+        self.apply(Command::RemoveSceneCameraKey { frame: local });
+    }
+
     /// One field of the selected clip, on the echo. `clip_commit` turns the
     /// accumulated edits into commands.
     pub fn clip_set(&mut self, field: ClipField, value: f32) {
+        // The scene clip's camera rows are keys on the scene's track, not
+        // clip fields - the document's scene is what changes.
+        match field {
+            ClipField::CameraX => {
+                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
+                    x: f64::from(value),
+                    ..pose
+                });
+                return;
+            }
+            ClipField::CameraY => {
+                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
+                    y: f64::from(value),
+                    ..pose
+                });
+                return;
+            }
+            ClipField::CameraZoom => {
+                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
+                    zoom: f64::from(value),
+                    ..pose
+                });
+                return;
+            }
+            // The row rides in degrees; the camera keeps radians.
+            ClipField::CameraRotation => {
+                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
+                    rotation: f64::from(value).to_radians(),
+                    ..pose
+                });
+                return;
+            }
+            _ => {}
+        }
         // Some words selected in the text box: the typography they can
         // wear goes on those words alone.
         if let Some((id, start, end)) = self.styled_words()
@@ -115,6 +232,13 @@ impl Studio {
                 | ClipField::MaskFeather
                 | ClipField::MaskExpand
                 | ClipField::MaskOpacity => {}
+                // The Camera tab's: `scene_camera_set` wrote the key and
+                // returned before the echo was borrowed, so none of these
+                // can be here - spelled so a new camera row fails loud.
+                | ClipField::CameraX
+                | ClipField::CameraY
+                | ClipField::CameraZoom
+                | ClipField::CameraRotation => {}
                 ClipField::Scale => {
                     write_keyable(clip, model::KeyProperty::Scale, value.clamp(0.05, 8.0), at)
                 }

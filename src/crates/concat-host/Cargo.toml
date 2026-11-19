@@ -21,6 +21,9 @@ concat-log.workspace = true
 concat-media.workspace = true
 concat-project.workspace = true
 concat-export.workspace = true
+# Scene clips expand into camera-baked image clips before flatten sees
+# them; the expansion lives with the rest of the scene-to-clip logic.
+concat-studio.workspace = true
 # The effect cards: every picture package drawn by its own shader; see
 # cards.rs.
 concat-effects.workspace = true

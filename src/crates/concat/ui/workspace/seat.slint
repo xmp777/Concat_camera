@@ -248,6 +248,7 @@ export component Seat inherits Rectangle {
             pane-seat: root.index;
             pane-removable: Editor.seats.length > 1;
             pane-removed => { root.removed(); }
+            scene-camera-clear => { Editor.scene-camera-clear(); }
 
             video-effects: Editor.video-effects;
             audio-effects: Editor.audio-effects;

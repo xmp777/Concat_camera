@@ -1215,6 +1215,21 @@ impl Studio {
         // A keyed property shows what it is worth at the playhead, which is
         // what the knob edits.
         let at = place_in(clip, self.playhead);
+        // The scene clip's camera at the playhead mapped into the clip,
+        // from the project's scene; degrees for rotation, as the row shows
+        // it. The Camera tab is a scene clip's whole inspector.
+        let camera = self.scene_camera_pose_at(clip);
+        let (camera_x, camera_y, camera_zoom, camera_rotation) = if clip.kind == model::ClipKind::Scene
+        {
+            (
+                camera.x as f32,
+                camera.y as f32,
+                camera.zoom as f32,
+                camera.rotation.to_degrees() as f32,
+            )
+        } else {
+            (0.0, 0.0, 1.0, 0.0)
+        };
         let text = clip.text.clone().unwrap_or_default();
         // Where the family sits in the picker's list; none when nothing on
         // this machine has it, which the picker shows in red.
@@ -1297,6 +1312,10 @@ impl Studio {
             stretch_x: shown(clip, model::KeyProperty::StretchX, at) as f32,
             stretch_y: shown(clip, model::KeyProperty::StretchY, at) as f32,
             opacity: shown(clip, model::KeyProperty::Opacity, at) as f32,
+            camera_x,
+            camera_y,
+            camera_zoom,
+            camera_rotation,
             volume: shown(clip, model::KeyProperty::Volume, at) as f32,
             audio_track: self
                 .project()

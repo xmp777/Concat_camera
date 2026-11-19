@@ -215,13 +215,27 @@ impl Studio {
         scene.set_max_frame(self.scene.max_frame);
         scene.set_status(self.scene.status.clone());
         scene.set_has_scene(self.scene.has_scene());
-        // A scene represented by a long enough timeline is driven by the
-        // playhead; a scene longer than the timeline keeps its own slider so
-        // the rest of it can still be walked.
+        // The fallback slider is for a scene the timeline does not carry:
+        // a scene clip on the lanes drives the frame from the playhead, so
+        // the slider would fight it. A standalone scene over a shorter
+        // timeline keeps its own slider, as it did before clips existed.
+        let timeline_has_scene_clip = self
+            .session
+            .as_ref()
+            .is_some_and(|session| {
+                session
+                    .project()
+                    .active()
+                    .clips
+                    .iter()
+                    .any(|clip| clip.kind == model::ClipKind::Scene)
+            });
         let scene_seconds = self.scene.duration_seconds().unwrap_or(0.0);
         let timeline_seconds = f64::from(self.duration());
         scene.set_show_frame_slider(
-            self.scene.has_scene() && timeline_seconds + 0.05 < scene_seconds,
+            self.scene.has_scene()
+                && !timeline_has_scene_clip
+                && timeline_seconds + 0.05 < scene_seconds,
         );
     }
 

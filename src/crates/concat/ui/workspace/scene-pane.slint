@@ -21,6 +21,7 @@ export global SceneView {
     callback drag-camera(float, float);
     callback drag-ended();
     callback save();
+    callback add-to-timeline();
 }
 
 // A concat-scene frame with its camera under the pointer, in the workspace.
@@ -57,6 +58,11 @@ export component ScenePane inherits Pane {
                 Button {
                     text: I18n.t("scene.open");
                     clicked => { SceneView.open(); }
+                }
+                Button {
+                    text: I18n.t("scene.addToTimeline");
+                    enabled: SceneView.has-scene;
+                    clicked => { SceneView.add-to-timeline(); }
                 }
                 Button {
                     text: I18n.t("scene.save");

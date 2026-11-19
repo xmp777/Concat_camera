@@ -1307,6 +1307,7 @@ dependencies = [
  "concat-media",
  "concat-project",
  "concat-render",
+ "concat-studio",
  "concat-text",
  "concat-vision",
  "cpal",

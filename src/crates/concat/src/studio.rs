@@ -3061,10 +3061,51 @@ fn label_of(id: &str) -> String {
 }
 
 impl Studio {
+    /// Hands the project's scene to the scene pane, which follows the
+    /// document when it embeds the project's scene: edits made anywhere -
+    /// here, undo, an agent - land in the pane, and a camera edit made in
+    /// the pane lands in the document. Cheap on every call: the pane
+    /// re-renders only when the scene actually changed.
+    pub(crate) fn sync_scene_pane(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let folder = session.path().to_owned();
+        let project = session.project().clone();
+        self.scene
+            .sync_from_project(&project, std::path::Path::new(&folder));
+    }
+
+    /// Plays and scrubs drive the scene pane: the project's scene clips on
+    /// the active timeline, `(scene id, start, duration)`, are what the
+    /// pane maps the playhead into. The pane syncs first, so an undo or a
+    /// command made elsewhere is on screen within one tick.
+    pub(crate) fn scene_follow_playhead(&mut self, seconds: f32, coarse: bool) {
+        self.sync_scene_pane();
+        let clips: Vec<(String, f64, f64)> = self
+            .session
+            .as_ref()
+            .map(|session| {
+                session
+                    .project()
+                    .active()
+                    .clips
+                    .iter()
+                    .filter(|clip| clip.kind == model::ClipKind::Scene)
+                    .filter_map(|clip| {
+                        clip.scene_id
+                            .clone()
+                            .map(|id| (id, clip.start, clip.duration))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.scene.follow_playhead(seconds, coarse, &clips);
+    }
+
     /// A window with nothing open: the launch screen, with the recents list
     /// read off disk.
-    pub fn new(host: Host) -> Self {
-        let prefs = Preferences::load(&host.dirs);
+    pub fn new(host: Host) -> Self {        let prefs = Preferences::load(&host.dirs);
         // The panels where the last session left them, while Settings says
         // to; a saved dock this build cannot read is the default instead.
         let saved = prefs.layout.as_ref().filter(|_| prefs.remembers_layout());

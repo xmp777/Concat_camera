@@ -411,7 +411,7 @@ impl Studio {
     /// [`Studio::apply`] as one move of an inspector gesture: the same
     /// bookkeeping, but the editor folds it into the gesture's undo step
     /// and the coalescing window stays open for the next move.
-    pub(super) fn apply_within(&mut self, gesture: &str, command: Command) -> Option<String> {
+    pub(crate) fn apply_within(&mut self, gesture: &str, command: Command) -> Option<String> {
         // A knob's gesture, folded into one step; said at Debug, since a
         // dial turned is many of these.
         let words = command_words(&command);

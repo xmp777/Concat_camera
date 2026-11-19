@@ -1345,6 +1345,9 @@ fn start(project: Option<std::path::PathBuf>, smoke: Smoke) -> Result<(), slint:
     scene.on_save(on_scene!(|state| {
         state.handle(Msg::Scene(SceneMsg::Save));
     }));
+    scene.on_add_to_timeline(on_scene!(|state| {
+        state.handle(Msg::Scene(SceneMsg::AddToTimeline));
+    }));
     editor.on_clip_dragged(on_lanes!(|state, seconds: f32, pixels: f32| {
         state.clip_dragged(seconds, pixels);
     }));
@@ -1584,6 +1587,9 @@ fn start(project: Option<std::path::PathBuf>, smoke: Smoke) -> Result<(), slint:
     // own once the control's moves pause; see `Studio::clip_commit`.
     editor.on_clip_commit(on_lanes!(|state| {
         state.clip_commit();
+    }));
+    editor.on_scene_camera_clear(on_lanes!(|state| {
+        state.scene_camera_clear();
     }));
 
     // ── the chains ──

@@ -9,12 +9,20 @@
 //! Results carry the request id and scene generation, so a frame from a
 //! previous scene or an older seek cannot rewind the slider or move the
 //! camera at the wrong time.
+//!
+//! Two sources, one truth: a scene either lives in the project document
+//! (the top-level `scene` field - the pane follows it, edits go through
+//! the command stack, and undo/redo and autosave just work) or is a
+//! standalone file the pane opened (edits stay in the pane until Save).
+//! A scene on the timeline plays as a clip: the frame the pane shows is
+//! the playhead mapped into the clip's local time.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use concat_camera::VirtualCamera;
-use concat_scene::{Easing, Scene};
+use concat_project::Project;
+use concat_scene::Scene;
 use concat_studio::{ScenePreviewer, load_scene, save_scene};
 use slint::SharedString;
 
@@ -38,14 +46,16 @@ pub enum SceneMsg {
     Open,
     /// A scene file was picked.
     Opened(PathBuf),
-    /// The frame slider moved (fallback when the timeline is empty).
+    /// The frame slider moved (fallback when the timeline has no scene clip).
     Seek(f32),
     /// The picture was dragged, in fractions of the displayed picture.
     Drag { dx: f32, dy: f32 },
     /// The pointer was lifted: draw the frame at full preview size again.
     DragEnded,
-    /// The Save button.
+    /// The Save button (a standalone scene file).
     Save,
+    /// Place the scene on the timeline at the playhead.
+    AddToTimeline,
 }
 
 /// One in-flight request: its id.
@@ -53,10 +63,12 @@ struct InFlight {
     id: u64,
 }
 
-/// One open scene: its file, where its assets live, the live document, and
-/// the previewer that reuses decoders and probed asset sizes.
+/// One open scene: where it lives, where its assets live, the live
+/// document, and the previewer that reuses decoders and probed asset
+/// sizes. `path` is `None` for the project's own scene, which the pane
+/// follows rather than owns.
 struct SceneState {
-    path: PathBuf,
+    path: Option<PathBuf>,
     dir: PathBuf,
     scene: RwLock<Scene>,
     previewer: Mutex<ScenePreviewer>,
@@ -89,10 +101,10 @@ impl Default for ScenePane {
             state: None,
             in_flight: None,
             pending: None,
-            request_id: 0,
-            generation: 0,
-            dragging: false,
-        }
+        request_id: 0,
+        generation: 0,
+        dragging: false,
+    }
     }
 }
 
@@ -120,7 +132,7 @@ impl ScenePane {
             }
             SceneMsg::Drag { dx, dy } => {
                 self.dragging = true;
-                self.drag(dx, dy);
+                self.drag(dx, dy, studio);
             }
             SceneMsg::DragEnded => {
                 if self.dragging {
@@ -129,6 +141,7 @@ impl ScenePane {
                 }
             }
             SceneMsg::Save => self.save(studio),
+            SceneMsg::AddToTimeline => self.add_to_timeline(studio),
         }
     }
 
@@ -152,20 +165,18 @@ impl ScenePane {
             return;
         }
         let playhead = studio.playhead;
-        let follow_timeline = studio.duration() > 0.0;
         match load_scene(&path) {
             Ok(scene) => {
                 self.generation += 1;
                 self.pending = None;
                 self.in_flight = None;
                 self.max_frame = (scene.duration_frames().ceil() as i32 - 1).max(0);
-                self.frame = if follow_timeline {
-                    (f64::from(playhead) * scene.fps())
-                        .floor()
-                        .clamp(0.0, f64::from(self.max_frame)) as f32
-                } else {
-                    0.0
-                };
+                // A standalone scene follows the timeline's whole length -
+                // it is not a clip, so its frame is the playhead at the
+                // scene's own rate.
+                self.frame = (f64::from(playhead) * scene.fps())
+                    .floor()
+                    .clamp(0.0, f64::from(self.max_frame)) as f32;
                 let (viewport_width, viewport_height) = scene
                     .camera
                     .keys
@@ -185,7 +196,7 @@ impl ScenePane {
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| PathBuf::from("."));
                 self.state = Some(Arc::new(SceneState {
-                    path,
+                    path: Some(path.clone()),
                     dir,
                     scene: RwLock::new(scene),
                     previewer: Mutex::new(ScenePreviewer::new()),
@@ -207,24 +218,90 @@ impl ScenePane {
         }
     }
 
-    fn drag(&mut self, dx: f32, dy: f32) {
+    /// Takes the project's scene as the pane's own: the pane follows the
+    /// document rather than owning a copy, so a camera edit made anywhere
+    /// (here, undo, an agent) lands here. A standalone file the user
+    /// opened is left alone; the frame is kept, clamped to the new
+    /// length; nothing re-renders unless the scene actually changed.
+    pub fn sync_from_project(&mut self, project: &Project, project_dir: &Path) {
+        let parsed = project
+            .extra
+            .get(concat_studio::SCENE_KEY)
+            .and_then(|value| serde_json::from_value::<Scene>(value.clone()).ok());
+        let embedded = self.state.as_ref().map(|state| state.path.is_none());
+        match (embedded, parsed) {
+            // The user's own file: not the project's to overwrite.
+            (Some(true), _) => {}
+            // No scene anywhere, and none embedded before: nothing to do.
+            (None, None) => {}
+            // The scene is gone from the project (an undo of the embed):
+            // the pane lets go of it.
+            (_, None) => {
+                self.generation += 1;
+                self.state = None;
+                self.image = slint::Image::default();
+                self.in_flight = None;
+                self.pending = None;
+                self.max_frame = 0;
+                self.frame = 0.0;
+                self.status = "Open a scene to preview it.".into();
+            }
+            (_, Some(scene)) => {
+                let changed = match self.state.as_ref() {
+                    Some(state) if state.path.is_none() => {
+                        *state.scene.write().unwrap_or_else(|p| p.into_inner()) != scene
+                    }
+                    _ => true,
+                };
+                let frame = self.frame;
+                match self.state.as_ref() {
+                    Some(state) if state.path.is_none() => {
+                        *state.scene.write().unwrap_or_else(|p| p.into_inner()) = scene.clone();
+                    }
+                    _ => {
+                        self.state = Some(Arc::new(SceneState {
+                            path: None,
+                            dir: project_dir.to_path_buf(),
+                            scene: RwLock::new(scene.clone()),
+                            previewer: Mutex::new(ScenePreviewer::new()),
+                        }));
+                    }
+                }
+                self.max_frame = (scene.duration_frames().ceil() as i32 - 1).max(0);
+                self.frame = frame.clamp(0.0, self.max_frame as f32);
+                if changed {
+                    self.status = scene_status(&scene);
+                    self.request(self.frame, false);
+                }
+            }
+        }
+    }
+
+    fn drag(&mut self, dx: f32, dy: f32, studio: &mut Studio) {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let mut scene = state.scene.write().unwrap_or_else(|p| p.into_inner());
-        let mut pose = scene.camera.pose_at(f64::from(self.frame));
-        let (world_dx, world_dy) = drag_world_delta(&pose, dx, dy);
-        pose.x -= world_dx;
-        pose.y -= world_dy;
-        let easing = scene
-            .camera
-            .keys
-            .iter()
-            .find(|key| (key.frame - f64::from(self.frame)).abs() < 1e-9)
-            .map(|key| key.easing)
-            .unwrap_or(Easing::LINEAR);
-        scene.camera.add_key(f64::from(self.frame), pose, easing);
+        let scene = state.scene.read().unwrap_or_else(|p| p.into_inner());
+        let pose = scene.camera.pose_at(f64::from(self.frame));
         drop(scene);
+        let (world_dx, world_dy) = drag_world_delta(&pose, dx, dy);
+        // The camera edit goes through the command stack, like every
+        // other edit: undoable, autosaved, and mirrored into the
+        // document. The whole drag folds into one undo step.
+        studio.apply_within(
+            "scene-camera-drag",
+            concat_project::Command::SetSceneCameraKey {
+                frame: f64::from(self.frame),
+                x: Some(pose.x - world_dx),
+                y: Some(pose.y - world_dy),
+                zoom: None,
+                rotation: None,
+                easing: None,
+            },
+        );
+        // The document now holds the new pose; pick it up right away so
+        // the drag's own coarse frame shows the camera that moved.
+        studio.sync_scene_pane();
         self.request(self.frame, true);
     }
 
@@ -233,28 +310,66 @@ impl ScenePane {
             self.status = "Open a scene first.".into();
             return;
         };
-        if same_manifest(&state.path, studio.project_folder.as_deref()) {
+        let Some(path) = state.path.clone() else {
+            self.status = "The project's scene saves with the project.".into();
+            return;
+        };
+        if same_manifest(&path, studio.project_folder.as_deref()) {
             self.status =
                 "Refusing to save over the open project's manifest; use Save As on a copy.".into();
             return;
         }
         let scene = state.scene.read().unwrap_or_else(|p| p.into_inner());
-        self.status = match save_scene(&state.path, &scene) {
-            Ok(()) => format!("Saved {}", state.path.display()).into(),
+        self.status = match save_scene(&path, &scene) {
+            Ok(()) => format!("Saved {}", path.display()).into(),
             Err(error) => error.into(),
         };
     }
 
-    /// Follow the editor's timeline playhead: the scene's frame is the
-    /// playhead time at the scene's own rate, clamped to its duration.
-    pub fn follow_playhead(&mut self, seconds: f32, coarse: bool) {
+    /// Places the scene on the timeline at the playhead, as a scene clip:
+    /// embedded when the project has none yet, matched when it holds this
+    /// one. The scene's own length becomes the clip's.
+    fn add_to_timeline(&mut self, studio: &mut Studio) {
+        let Some(state) = self.state.clone() else {
+            self.status = "Open a scene first.".into();
+            return;
+        };
+        let scene = state.scene.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let start = f64::from(studio.playhead);
+        studio.apply(concat_project::Command::AddSceneClip {
+            track_id: None,
+            above: false,
+            start,
+            scene,
+            name: None,
+        });
+    }
+
+    /// Follow the editor's timeline playhead. `scene_clips` are the
+    /// timeline's scene clips as `(scene id, start, duration)`; the open
+    /// scene's frame is its clip's local time, or, outside every clip,
+    /// the nearest clip's boundary frame. A standalone scene (no clip of
+    /// its own id) falls back to the playhead at its own rate, as before.
+    pub fn follow_playhead(&mut self, seconds: f32, coarse: bool, scene_clips: &[(String, f64, f64)]) {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let fps = state.scene.read().unwrap_or_else(|p| p.into_inner()).fps();
-        let frame = (f64::from(seconds) * fps)
-            .floor()
-            .clamp(0.0, f64::from(self.max_frame)) as f32;
+        let scene = state.scene.read().unwrap_or_else(|p| p.into_inner());
+        let fps = scene.fps();
+        let max = scene.duration_frames();
+        let owned: Vec<(f64, f64)> = scene_clips
+            .iter()
+            .filter(|(id, _, _)| state.path.is_none() && *id == scene.id)
+            .map(|(_, start, duration)| (*start, *duration))
+            .collect();
+        drop(scene);
+        let frame = if owned.is_empty() {
+            // Standalone: the whole timeline is the scene's clock, as
+            // before the clip existed.
+            (f64::from(seconds) * fps).floor().clamp(0.0, max)
+        } else {
+            scene_frame_at(&owned, f64::from(seconds), fps, max)
+        } as f32;
         if (frame - self.frame).abs() > 0.5 {
             self.frame = frame;
             self.request(frame, coarse);
@@ -338,6 +453,66 @@ impl ScenePane {
             },
             |studio, app, models| studio.publish_scene(app, models),
         );
+    }
+}
+
+/// The pane's opening status line: the scene's name over its output frame
+/// and rate.
+fn scene_status(scene: &Scene) -> SharedString {
+    let (viewport_width, viewport_height) = scene
+        .camera
+        .keys
+        .first()
+        .map(|key| (key.pose.viewport_width, key.pose.viewport_height))
+        .unwrap_or((1920, 1080));
+    format!(
+        "{}  ·  {}×{}  ·  {:.2} fps",
+        scene.name,
+        viewport_width,
+        viewport_height,
+        scene.fps()
+    )
+    .into()
+}
+
+/// The scene frame the timeline shows at `seconds`, over the scene clips
+/// `(start, duration)` that play this scene: inside a clip, its local
+/// time; outside every one, the nearest clip's boundary frame. Empty
+/// `clips` falls back to the playhead as the scene's own clock.
+fn scene_frame_at(clips: &[(f64, f64)], seconds: f64, fps: f64, max_frame: f64) -> f64 {
+    if clips.is_empty() {
+        return (seconds * fps).floor().clamp(0.0, max_frame);
+    }
+    let inside = clips.iter().find(|(start, duration)| {
+        seconds >= *start && seconds < *start + *duration
+    });
+    if let Some((start, _)) = inside {
+        return ((seconds - start) * fps).floor().clamp(0.0, max_frame);
+    }
+    // Nearest boundary, over all clips: the distance to a clip's span is
+    // zero inside it and the gap to an edge outside.
+    let nearest = clips
+        .iter()
+        .min_by(|(a_start, a_duration), (b_start, b_duration)| {
+            let da = (seconds - a_start)
+                .abs()
+                .min((seconds - (a_start + a_duration)).abs());
+            let db = (seconds - b_start)
+                .abs()
+                .min((seconds - (b_start + b_duration)).abs());
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    match nearest {
+        Some((start, duration)) => {
+            let head = (seconds - start).abs();
+            let tail = (seconds - (start + duration)).abs();
+            if head <= tail {
+                0.0
+            } else {
+                (duration * fps).floor().clamp(0.0, max_frame)
+            }
+        }
+        None => 0.0,
     }
 }
 
@@ -431,5 +606,34 @@ mod tests {
         ));
         assert!(!same_manifest(&manifest, None));
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The playhead inside a scene clip maps to the clip's local time;
+    /// outside every clip it holds the nearest clip's boundary frame, so
+    /// scrubbing the timeline never leaves the scene blank.
+    #[test]
+    fn the_playhead_maps_to_the_scene_clips_local_time() {
+        let fps = 30.0;
+        let max = 90.0;
+        // One clip from 2s to 5s.
+        let clips = vec![(2.0, 3.0)];
+        assert_eq!(scene_frame_at(&clips, 2.0, fps, max), 0.0);
+        assert_eq!(scene_frame_at(&clips, 3.5, fps, max), 45.0);
+        assert_eq!(scene_frame_at(&clips, 4.99, fps, max), 89.0);
+        // Before it: the head frame. After it: the last frame.
+        assert_eq!(scene_frame_at(&clips, 0.0, fps, max), 0.0);
+        assert_eq!(scene_frame_at(&clips, 10.0, fps, max), 90.0);
+        // Two clips: nearest boundary wins. The first clip's tail frame is
+        // its own length at the scene's rate (1s × 30fps), not the
+        // scene's last frame - only a clip reaching the scene's end does.
+        let clips = vec![(2.0, 1.0), (6.0, 1.0)];
+        assert_eq!(scene_frame_at(&clips, 4.4, fps, max), 30.0, "closer to the first clip's tail");
+        assert_eq!(scene_frame_at(&clips, 4.6, fps, max), 0.0, "closer to the second clip's head");
+        // A trimmed clip maps only its own window.
+        let clips = vec![(0.0, 1.5)];
+        assert_eq!(scene_frame_at(&clips, 1.4, fps, max), 42.0);
+        // No clip of this scene: the timeline is the scene's clock, as a
+        // standalone scene always was - clamped to the scene's own length.
+        assert_eq!(scene_frame_at(&[], 5.0, fps, max), 90.0);
     }
 }

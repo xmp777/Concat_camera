@@ -160,6 +160,9 @@ export global Editor {
     /// fresh model on every publish, and every panel would re-seed for it.
     in-out property <[string]> audio-tracks;
     callback clip-set(field: ClipField, value: float);
+    /// The Camera tab's strip button: take the scene camera's key at the
+    /// playhead off, the way ClearClipKey does for a clip's own property.
+    callback scene-camera-clear();
     callback clip-set-text(field: ClipTextField, value: string);
     /// A title's words as typed, and the caret's byte after the edit.
     callback clip-set-words(text: string, caret: int);

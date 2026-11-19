@@ -342,9 +342,20 @@ impl Session {
     /// The active timeline flattened for rendering. This is what export and
     /// preview consume: the engine flattens its own session, so the pixels
     /// rendered are the model's, never a copy of it.
+    ///
+    /// Scene clips expand first, into the camera-baked image clips of
+    /// [`concat_studio::expand_project_scenes`] - the one expansion point
+    /// for preview and export alike, so a scene plays through the monitor
+    /// exactly as it exports.
     pub fn flattened_clips(&self) -> Vec<concat_export::ExportClip> {
-        concat_export::flatten::flatten_timeline_in(
+        // `path` is the project folder; scene assets resolve against it,
+        // as flatten's own media paths already do.
+        let expanded = concat_studio::expand_project_scenes(
             self.editor.project(),
+            std::path::Path::new(&self.path),
+        );
+        concat_export::flatten::flatten_timeline_in(
+            &expanded,
             None,
             Some(std::path::Path::new(&self.path)),
         )
