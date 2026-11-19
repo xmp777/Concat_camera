@@ -442,3 +442,54 @@ fn through_a_running_server_the_agent_shares_its_api() {
     drop(other);
     server.stop();
 }
+
+/// A scene goes in, an MP4 comes out: the camera track is evaluated frame
+/// by frame and drawn by the same compositor the editor exports with.
+#[test]
+fn an_agent_renders_a_camera_scene_headless() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let home = scratch.path();
+    let mut agent = Agent::spawn(home, "headless", &[]);
+    let (_, welcome) = agent.ask(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "e2e", "version": "1" },
+        }),
+    );
+    assert_eq!(welcome["result"]["protocolVersion"], "2025-06-18");
+    agent.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../examples/camera_demo/scene.json")
+        .canonicalize()
+        .expect("the demo scene is in the repository");
+    let output = home.join("camera_demo.mp4");
+    let (_, reply) = agent.ask(
+        "tools/call",
+        json!({
+            "name": "scene_render",
+            "arguments": {
+                "scenePath": scene.to_string_lossy(),
+                "output": output.to_string_lossy(),
+                "crf": 28,
+                "preset": "ultrafast",
+            },
+        }),
+    );
+    assert!(
+        reply.get("error").is_none(),
+        "scene_render refused: {reply}"
+    );
+    if reply["result"]["isError"].as_bool() == Some(true) {
+        panic!("scene_render failed: {reply}");
+    }
+    assert!(output.is_file(), "the render writes the file: {reply}");
+
+    let info = concat_media::probe(&output).expect("the file probes as media");
+    let video = info.require_video().expect("it has pictures");
+    assert_eq!((video.width, video.height), (1920, 1080));
+    let duration = info.duration.expect("a duration").as_f64();
+    assert!((duration - 3.0).abs() < 0.2, "duration {duration}");
+}

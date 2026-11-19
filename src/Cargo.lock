@@ -1336,7 +1336,10 @@ name = "concat-mcp"
 version = "0.2.12"
 dependencies = [
  "concat-api",
+ "concat-media",
+ "concat-scene",
  "concat-server",
+ "concat-studio",
  "serde_json",
  "tempfile",
 ]
@@ -1406,6 +1409,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "concat-scene"
+version = "0.2.12"
+dependencies = [
+ "concat-camera",
+ "concat-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "concat-server"
 version = "0.2.12"
 dependencies = [
@@ -1439,6 +1452,16 @@ dependencies = [
  "tokenizers",
  "ureq 2.12.1",
  "whisper-rs",
+]
+
+[[package]]
+name = "concat-studio"
+version = "0.2.12"
+dependencies = [
+ "concat-export",
+ "concat-media",
+ "concat-scene",
+ "serde_json",
 ]
 
 [[package]]

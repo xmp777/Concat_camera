@@ -75,6 +75,8 @@ pub enum Action {
     Captions,
     /// `export.status` until the job ends or the time is up.
     ExportWait,
+    /// Renders a 2D scene (concat-scene JSON) through Concat's export pipeline.
+    SceneRender,
     /// `updateClip` with only a mask.
     Mask,
     /// `preview.frame`, as an image.
@@ -483,6 +485,15 @@ pub fn catalogue() -> Vec<Tool> {
         )
         .destroying(),
         Tool {
+            name: "scene_render",
+            title: "Render a 2D scene",
+            description: "Renders a 2D scene (concat-scene JSON: world-space layers plus a camera track) to `output` (an .mp4 path) through Concat's own compositor and encoder. `scenePath` names the scene file; relative asset paths in it resolve beside it. Optional `crf` (0-51, 20) and `preset` (x264 speed, \"medium\"). Synchronous: it returns when the file is written. No project needs to be open.",
+            read_only: false,
+            destructive: false,
+            idempotent: false,
+            action: Action::SceneRender,
+        },
+        Tool {
             name: "preview_frame",
             title: "Preview a frame",
             description: "Renders the true composited frame at `time` seconds on an open project's timeline and returns it as an image to look at - titles, effects and transforms included. Without `width` and `height` it fits within 1280 pixels; give both for another size (8192 at most). With `output` (a .png path) it is written there instead, replacing any file already at that path.",
@@ -638,6 +649,32 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
             Some(schema)
         }
         Action::PreviewFrame => schemas.method("preview.frame"),
+        Action::SceneRender => Some(json!({
+            "type": "object",
+            "properties": {
+                "scenePath": {
+                    "type": "string",
+                    "description": "Path to a concat-scene JSON file.",
+                },
+                "output": {
+                    "type": "string",
+                    "description": "MP4 file to write.",
+                },
+                "crf": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 51,
+                    "default": 20,
+                    "description": "Quality; lower is better and larger.",
+                },
+                "preset": {
+                    "type": "string",
+                    "default": "medium",
+                    "description": "x264 speed/size preset.",
+                },
+            },
+            "required": ["scenePath", "output"],
+        })),
         Action::Mask => {
             let update = schemas.command("updateClip")?;
             let mut masks = update
@@ -748,11 +785,57 @@ fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, A
         }
         Action::ExportWait => export_wait(arguments, backend, context.cancelled, context.progress),
         Action::PreviewFrame => preview(arguments, backend),
+        Action::SceneRender => scene_render(arguments),
         Action::Mask => {
             let result = backend.call(mask(arguments)?)?;
             Ok(Outcome::json(summary::view(&result)))
         }
     }
+}
+
+/// `scene_render`: a concat-scene JSON through Concat's own export pipeline.
+fn scene_render(mut arguments: Value) -> Result<Outcome, ApiError> {
+    let invalid = |why: &str| ApiError::invalid(format!("invalid arguments: {why}"));
+    let fields = arguments
+        .as_object_mut()
+        .ok_or_else(|| invalid("the arguments are an object"))?;
+    let scene_path = fields
+        .remove("scenePath")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| invalid("missing field `scenePath`"))?;
+    let output = fields
+        .remove("output")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| invalid("missing field `output`"))?;
+    let crf = fields
+        .remove("crf")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(20)
+        .min(51) as u8;
+    let preset = fields
+        .remove("preset")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "medium".to_owned());
+    if let Some(unknown) = fields.keys().next() {
+        return Err(invalid(&format!("unknown field `{unknown}`")));
+    }
+
+    let text = std::fs::read_to_string(&scene_path)
+        .map_err(|error| invalid(&format!("cannot read {scene_path}: {error}")))?;
+    let scene: concat_scene::Scene = serde_json::from_str(&text)
+        .map_err(|error| invalid(&format!("invalid scene JSON: {error}")))?;
+    let scene_dir = std::path::Path::new(&scene_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let options = concat_studio::RenderOptions {
+        output: std::path::PathBuf::from(&output),
+        crf,
+        preset,
+    };
+    let mut progress = |_: i64, _: i64, _: &'static str| {};
+    concat_studio::render_scene(&scene, scene_dir, &options, &mut progress)
+        .map_err(ApiError::invalid)?;
+    Ok(Outcome::json(json!({ "output": output })))
 }
 
 /// `clip_masks`: a clip patch with only its masks.
@@ -1112,6 +1195,10 @@ mod tests {
             ("export_wait", json!({ "job": "j1", "timeoutSeconds": 5 })),
             ("export_cancel", json!({ "job": "j1" })),
             (
+                "scene_render",
+                json!({ "scenePath": "/tmp/scene.json", "output": "/tmp/scene.mp4" }),
+            ),
+            (
                 "preview_frame",
                 json!({ "path": "/tmp/Cut", "time": 1.5, "width": 320, "height": 180 }),
             ),
@@ -1170,6 +1257,8 @@ mod tests {
                 }
                 Action::PreviewFrame => request("preview.frame", sample.clone()),
                 Action::Mask => mask(sample.clone()),
+                // Scene rendering is not an API request; its schema was checked above.
+                Action::SceneRender => continue,
             };
             let built = built.unwrap_or_else(|error| panic!("{name}: {error}"));
             // Back again: the request as the API writes it fits the API's

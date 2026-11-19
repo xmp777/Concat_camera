@@ -1,0 +1,13 @@
+[package]
+name = "concat-studio"
+description = "Headless scene renderer for Concat_camera: 2D scene + virtual camera to MP4"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+concat-scene.workspace = true
+concat-export.workspace = true
+concat-media.workspace = true
+serde_json.workspace = true

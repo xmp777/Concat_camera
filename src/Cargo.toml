@@ -23,6 +23,8 @@ concat-effects = { path = "crates/concat-effects" }
 concat-text = { path = "crates/concat-text" }
 concat-vision = { path = "crates/concat-vision" }
 concat-camera = { path = "crates/concat-camera" }
+concat-scene = { path = "crates/concat-scene" }
+concat-studio = { path = "crates/concat-studio" }
 concat-log = { path = "crates/concat-log" }
 concat = { path = "crates/concat" }
 

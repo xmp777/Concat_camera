@@ -40,12 +40,28 @@
 | `cargo build -p concat-cli` | 成功（`concat-cli.exe`） |
 | `concat-cli probe <phase2_video.mp4>` | `h264 1920x1080 @30fps, 1.000s` |
 
-### 1.4 重要事实：相机尚未接入导出
+### 1.4 P1 能力闭环（已落地）
 
-`plan_frame_with_camera(..., Some(camera))` 目前**只有测试调用**。
-`concat-export` 与 `concat-cli` 仍调用 `plan_frame(...)`（camera=None）；commit 只在 `FramePlan` 拷贝处透传 `camera` 字段。
+| 项 | 实现 | 验证 |
+|---|---|---|
+| `concat-scene` crate | Scene / SceneLayer（世界像素）/ CameraTrack / MovePreset / `plan_layers` | 5 tests |
+| 相对运镜 | `MovePreset::target_pose` + `pose_at`（以当前机位为起点，复用 `Ease`） | 单测 |
+| 无头渲染器 `concat-studio` | Scene → `ExportClip`（相机逐帧采样，中性 base + 绝对关键帧）→ `concat_export::render_on` | 示例 MP4 |
+| MCP 工具 `scene_render` | `scenePath`/`output`/`crf`/`preset`，headless 可用 | e2e 测试 + 实跑 |
+| 示例工程 | `examples/camera_demo/`（背景+2角色+道具，推近 90 帧） | `out.mp4` 3s 1920×1080 h264 |
 
-> 因此当前状态应描述为：**数学与数据通路已就绪，产品路径未接线**。P1 的第一要务是把"项目中的摄像机 → 每帧位姿 → plan/export"打通，并用成片验证。
+**关键实现细节**：Concat 的 keyed 属性是**绝对值**，clip 的 base 必须取中性值（scale 1 / offset 0 / rotation 0），
+否则会与关键帧叠加导致位移与缩放翻倍。`concat-studio` 已按此处理，并用示例的像素位置验证。
+
+截图：`docs/assets/camera_demo_frame0.png`（起始）与 `camera_demo_frame89.png`（推近结束）。
+
+### 1.5 重要事实：编辑器内导出尚未接入相机
+
+`plan_frame_with_camera(..., Some(camera))` 在编辑器/CLI 的导出路径中**仍未被调用**：
+`concat-export` 与 `concat-cli` 依旧走 `plan_frame(...)`（camera=None）；commit 只在 `FramePlan` 拷贝处透传 `camera` 字段。
+
+P1 的无头路径已经绕过这一点：`concat-studio` 把相机运动逐帧烘焙进 `ExportClip` 的关键帧，再交给同一套
+`render_on` 合成/编码。编辑器内的实时相机预览与"打开工程导出"仍需后续把相机求值接进 `plan_frame` 调用点。
 
 ---
 
@@ -255,4 +271,6 @@ pub struct MovePreset {
 
 ## 8. 变更记录
 
-- 2026-11-19：P0 收尾。验证 camera/render 测试；stash parallax 实验；本文件首版；即将 push origin/main。
+- 2026-11-19：P0 收尾。验证 camera/render 测试；stash parallax 实验；本文件首版；push origin/main。
+- 2026-11-19（P1）：新增 `concat-scene`（5 tests）、`concat-studio` 无头渲染器、MCP `scene_render` 工具；
+  示例 `examples/camera_demo/` 导出 3s/1920×1080/h264 并通过 MCP e2e 测试。相机 keyed 属性的中性 base 问题已修复。

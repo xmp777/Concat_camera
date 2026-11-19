@@ -1,0 +1,74 @@
+{
+  "id": "demo-scene",
+  "name": "教室 - 推近",
+  "world_width": 8000.0,
+  "world_height": 4500.0,
+  "rate_num": 30,
+  "rate_den": 1,
+  "background": [0.06, 0.08, 0.09, 1.0],
+  "layers": [
+    {
+      "id": "bg",
+      "name": "背景",
+      "kind": "background",
+      "asset": "assets/bg.png",
+      "transform": { "x": 4000.0, "y": 2250.0, "scale": 1.0, "rotation_deg": 0.0, "stretch_x": 1.0, "stretch_y": 1.0 },
+      "in_frame": 0.0,
+      "duration_frames": 90.0,
+      "opacity": 1.0,
+      "visible": true,
+      "z": 0
+    },
+    {
+      "id": "sakura",
+      "name": "小樱",
+      "kind": "character",
+      "asset": "assets/char_a.png",
+      "transform": { "x": 3600.0, "y": 2250.0, "scale": 0.65, "rotation_deg": 0.0, "stretch_x": 1.0, "stretch_y": 1.0 },
+      "in_frame": 0.0,
+      "duration_frames": 90.0,
+      "opacity": 1.0,
+      "visible": true,
+      "z": 1,
+      "expression": "smile"
+    },
+    {
+      "id": "ache",
+      "name": "阿澈",
+      "kind": "character",
+      "asset": "assets/char_b.png",
+      "transform": { "x": 4400.0, "y": 2250.0, "scale": 0.65, "rotation_deg": 0.0, "stretch_x": 1.0, "stretch_y": 1.0 },
+      "in_frame": 0.0,
+      "duration_frames": 90.0,
+      "opacity": 1.0,
+      "visible": true,
+      "z": 2
+    },
+    {
+      "id": "desk",
+      "name": "课桌",
+      "kind": "prop",
+      "asset": "assets/prop.png",
+      "transform": { "x": 4000.0, "y": 2600.0, "scale": 0.3, "rotation_deg": 0.0, "stretch_x": 1.0, "stretch_y": 1.0 },
+      "in_frame": 0.0,
+      "duration_frames": 90.0,
+      "opacity": 1.0,
+      "visible": true,
+      "z": 3
+    }
+  ],
+  "camera": {
+    "keys": [
+      {
+        "frame": 0.0,
+        "pose": { "x": 4000.0, "y": 2250.0, "zoom": 1.0, "rotation": 0.0, "viewport_width": 1920, "viewport_height": 1080 },
+        "easing": { "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 }
+      },
+      {
+        "frame": 90.0,
+        "pose": { "x": 4000.0, "y": 2250.0, "zoom": 1.6, "rotation": 0.0, "viewport_width": 1920, "viewport_height": 1080 },
+        "easing": { "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 }
+      }
+    ]
+  }
+}
