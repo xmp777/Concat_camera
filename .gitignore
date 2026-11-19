@@ -48,6 +48,14 @@ desktop.ini
 
 # Local environment
 .env
+.env.*
+
+# Local binary dependencies & runtime artifacts
+/deps/
+/onnxruntime-*/
+*.nupkg
+setup-env.ps1
+
 .env.local
 
 # An FFmpeg development build unpacked locally for the linked engine

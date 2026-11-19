@@ -1,0 +1,12 @@
+[package]
+name = "concat-camera"
+description = "Virtual camera and 2D scene viewport projection engine for Concat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+concat-core.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true, optional = true }
