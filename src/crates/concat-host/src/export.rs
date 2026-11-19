@@ -8,6 +8,8 @@
 //! the quality, and the one export that can run at a time reports through a
 //! callback and stops through a flag.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -64,11 +66,13 @@ pub struct Progress {
 
 /// The session flattened into a request the engine can render.
 pub fn request(session: &Session, spec: &ExportSpec, titles: Vec<ExportClip>) -> ExportRequest {
+    let mut scene_probes = session.scene_probes();
     request_for(
         session.project(),
         std::path::Path::new(session.path()),
         spec,
         titles,
+        &mut scene_probes,
     )
 }
 
@@ -81,12 +85,15 @@ pub fn request_for(
     project_dir: &std::path::Path,
     spec: &ExportSpec,
     titles: Vec<ExportClip>,
+    scene_probes: &mut HashMap<PathBuf, (u32, u32)>,
 ) -> ExportRequest {
     let video = project.active().video;
     // Scene clips expand first, into the camera-baked image clips of
     // `expand_project_scenes` - the same expansion the preview seam runs -
     // so an export renders the scene exactly as the monitor shows it.
-    let expanded = concat_studio::expand_project_scenes(project, project_dir);
+    // `scene_probes` is the caller's cache (the session's), so a previewed
+    // scene does not re-read its assets here.
+    let expanded = concat_studio::expand_project_scenes(project, project_dir, scene_probes);
     let mut clips =
         concat_export::flatten::flatten_timeline_in(&expanded, None, Some(project_dir));
     clips.extend(titles);

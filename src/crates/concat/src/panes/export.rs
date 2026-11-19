@@ -530,7 +530,13 @@ impl ExportPane {
                     return Err("export cancelled".to_owned());
                 };
                 let titles = titles.into_iter().map(|title| title.clip).collect();
-                let mut request = export::request_for(&project, &project_dir, &spec, titles);
+                // This thread works from a snapshot, not the session, so it
+                // carries its own scene-asset probe cache: within one
+                // export the sizes are read once, across scene clips and
+                // sampled camera keys alike.
+                let mut scene_probes = std::collections::HashMap::new();
+                let mut request =
+                    export::request_for(&project, &project_dir, &spec, titles, &mut scene_probes);
                 request.width = width;
                 request.height = height;
                 request.rate_num = num;

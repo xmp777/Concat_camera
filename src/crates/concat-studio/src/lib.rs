@@ -297,6 +297,10 @@ fn scene_clips(
             animation.push(key("offsetY", *at, plan.transform.offset_y));
             animation.push(key("scale", *at, plan.transform.scale));
             animation.push(key("rotation", *at, plan.transform.rotation));
+            // 非均匀拉伸与位移/缩放同批烘焙：投影给出的 stretch 丢了，
+            // 整场导出会把带 stretch 的图层悄悄拉直（与展开路径同规）。
+            animation.push(key("stretchX", *at, plan.transform.stretch_x));
+            animation.push(key("stretchY", *at, plan.transform.stretch_y));
         }
 
         clips.push(json!({
@@ -398,13 +402,21 @@ fn scene_clips_at(
 /// 编辑器的预览与导出都从 `Session::flattened_clips()` 出发，而 flatten
 /// 只认识图片/视频/音频。这里在每个 Scene 片段的时间轴窗口内，把场景
 /// 图层（按 z 序）重建为图像片段：相机运动按窗口重新采样，烘焙为
-/// Scale/OffsetX/OffsetY/Rotation 关键帧（`at` 为片段内 0..=1，线性缓动
-/// ——采样已经走过场景相机轨道自身的缓动），交给 Concat 原有的合成器。
-/// 场景背景遵循 Concat 的 background 语义：仅当场景片段位于最下方图像
-/// 轨时，它展开出的片段才携带 `Background::Color`。图形图层（无素材）
-/// 与不可见图层跳过；场景缺失、无法解析或 `scene_id` 不匹配时按原样
-/// 返回——flatten 对 Scene 片段失败软跳过，该处画面为画布色。
-pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
+/// Scale/OffsetX/OffsetY/Rotation/StretchX/StretchY 关键帧（`at` 为片段内
+/// 0..=1，线性缓动——采样已经走过场景相机轨道自身的缓动），交给 Concat
+/// 原有的合成器。场景背景遵循 Concat 的 background 语义：仅当场景片段
+/// 位于最下方图像轨时，它展开出的片段才携带 `Background::Color`。图形
+/// 图层（无素材）与不可见图层跳过；场景缺失、无法解析或 `scene_id`
+/// 不匹配时按原样返回——flatten 对 Scene 片段失败软跳过，该处画面为
+/// 画布色。
+///
+/// `probes` 由调用方持有（Session 生命周期）：素材尺寸的 probe 是文件
+/// I/O，逐帧展开时命中缓存就不再读文件。
+pub fn expand_project_scenes(
+    project: &Project,
+    project_dir: &Path,
+    probes: &mut HashMap<PathBuf, (u32, u32)>,
+) -> Project {
     use concat_project::model::{Background, Clip, ClipKey, ClipKind, KeyEase, KeyProperty};
 
     let Some(scene) = project
@@ -421,10 +433,14 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
     let mut media = project.media.clone();
     let mut media_ids: HashMap<PathBuf, String> = HashMap::new();
     let mut media_seq = 0usize;
+    // 合成 MediaItem 的尺寸必须真实：flatten 把 `media.width/height` 交
+    // 给 ExportClip，合成器按它适配画面——None 会让展开图层渲染成空帧
+    // （Phase 5 验收里"面板黑屏"的实质之一）。
     let media_id_for = |path: PathBuf,
                             media: &mut Vec<concat_project::model::MediaItem>,
                             ids: &mut HashMap<PathBuf, String>,
-                            seq: &mut usize| -> String {
+                            seq: &mut usize,
+                            probes: &mut HashMap<PathBuf, (u32, u32)>| -> String {
         ids.get(&path).cloned().unwrap_or_else(|| {
             // `scn` 前缀在 "m" 命名空间之外；即便工程里手工造过同名的
             // 素材项，也递增到没有碰撞为止——flatten 按首个 id 匹配。
@@ -434,6 +450,7 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                 id = format!("scn{}", seq);
             }
             *seq += 1;
+            let (media_width, media_height) = media_size(&path, probes).unwrap_or((0, 0));
             media.push(concat_project::model::MediaItem {
                 id: id.clone(),
                 path: path.to_string_lossy().into_owned(),
@@ -443,8 +460,8 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                     .unwrap_or_default(),
                 duration: None,
                 kind: concat_project::model::MediaKind::Image,
-                width: None,
-                height: None,
+                width: (media_width > 0).then_some(media_width),
+                height: (media_height > 0).then_some(media_height),
                 frame_rate: None,
                 frame_rate_fraction: None,
                 video_codec: None,
@@ -462,7 +479,6 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
         })
     };
 
-    let mut probes: HashMap<PathBuf, (u32, u32)> = HashMap::new();
     let mut expanded_timelines: Vec<std::sync::Arc<concat_project::model::Timeline>> =
         Vec::new();
     for timeline in project.timelines.iter() {
@@ -497,9 +513,9 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                     continue; // 图形图层需要素材化后才能进入导出
                 };
                 let path = resolve(project_dir, asset);
-                // 素材尺寸只影响合成器自己的适配；这里 probe 一次仅用于
-                // 失败早报，缓存跟随调用存活。
-                if media_size(&path, &mut probes).is_err() {
+                // 素材尺寸只影响合成器自己的适配；probe 一次进调用方的
+                // 缓存，逐帧展开时命中即不再读文件。
+                if media_size(&path, probes).is_err() {
                     continue; // 缺素材的图层与导出单场景一致：跳过而非失败
                 }
                 let layer_start = layer.in_frame.max(0.0) / fps;
@@ -552,6 +568,7 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                     &mut media,
                     &mut media_ids,
                     &mut media_seq,
+                    probes,
                 );
                 out.opacity = layer.opacity;
                 // 展开片段保留场景归属：既标记来源（背景轨判定用它），
@@ -908,7 +925,7 @@ mod tests {
         write_asset(&dir, "bg.png");
         write_asset(&dir, "hero.png");
 
-        let expanded = expand_project_scenes(project, &dir);
+        let expanded = expand_project_scenes(project, &dir, &mut HashMap::new());
         let timeline = expanded.active();
         // 展开替换了 Scene 片段本身：flatten 对 Scene 失败软跳过，替换
         // 后那里就是真实的图像片段。
@@ -952,12 +969,17 @@ mod tests {
         assert!((hero.start - 2.0).abs() < 1e-9);
         for clip in [bg, hero] {
             assert_eq!(clip.scene_id.as_deref(), Some("sc1"), "provenance kept");
+            // 尺寸来自 probe（flatten 交给合成器适配画面）——None 会让
+            // 展开图层渲染成空帧。
             assert!(
                 expanded
                     .media
                     .iter()
-                    .any(|item| item.id == clip.media_id && item.kind == concat_project::model::MediaKind::Image),
-                "the synthetic media item exists"
+                    .any(|item| item.id == clip.media_id
+                        && item.kind == concat_project::model::MediaKind::Image
+                        && item.width == Some(1)
+                        && item.height == Some(1)),
+                "the synthetic media item exists with its probed size"
             );
             // 相机推近：scale 关键帧首尾不同（1/zoom 与 1/2zoom 的差异由
             // 投影决定，这里只断言"运动被烘焙了"）。
@@ -1032,7 +1054,7 @@ mod tests {
         write_asset(&dir, "bg.png");
         write_asset(&dir, "prop.png");
 
-        let expanded = expand_project_scenes(project, &dir);
+        let expanded = expand_project_scenes(project, &dir, &mut HashMap::new());
         let timeline = expanded.active();
         let image_clips: Vec<_> = timeline
             .clips
@@ -1054,7 +1076,51 @@ mod tests {
 
         let editor = Editor::new();
         let project = editor.project();
-        let expanded = expand_project_scenes(project, std::path::Path::new("."));
+        let expanded = expand_project_scenes(project, std::path::Path::new("."), &mut HashMap::new());
         assert_eq!(expanded, *project);
+    }
+
+    /// 整场导出的逐层烘焙带上非均匀拉伸：投影给出的 stretch 丢了，
+    /// 带 stretch 的图层会被悄悄拉直（与展开路径同规）。
+    #[test]
+    fn the_whole_scene_export_bakes_stretch() {
+        use concat_scene::{LayerKind, SceneLayer};
+
+        let dir =
+            std::env::temp_dir().join(format!("concat-studio-stretch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        write_asset(&dir, "bg.png");
+
+        let mut scene = Scene::new("s", "拉伸", 1000.0, 1000.0, 64, 64);
+        scene.layers.push(SceneLayer {
+            id: "l1".into(),
+            name: "层".into(),
+            kind: LayerKind::Prop,
+            asset: Some("bg.png".into()),
+            transform: concat_scene::SceneTransform {
+                stretch_x: 1.5,
+                stretch_y: 0.75,
+                ..Default::default()
+            },
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        });
+
+        let clips = scene_clips(&scene, &dir, &mut HashMap::new()).expect("clips");
+        let animation = clips[0]["animation"].as_array().expect("animation");
+        let stretched_x = animation
+            .iter()
+            .find(|key| key["property"] == "stretchX" && key["value"] == 1.5);
+        let stretched_y = animation
+            .iter()
+            .find(|key| key["property"] == "stretchY" && key["value"] == 0.75);
+        assert!(stretched_x.is_some(), "stretchX baked into the keys");
+        assert!(stretched_y.is_some(), "stretchY baked too");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

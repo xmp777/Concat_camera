@@ -11,6 +11,9 @@
 //! Saving reuses `projects::save`'s temp-file-and-rename, so the document on
 //! disk is written by exactly one code path.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use concat_project::model::VideoSettings;
 use concat_project::{Command, DocumentSettings, Editor, Project, UnreadSummary};
 use serde::Serialize;
@@ -31,6 +34,16 @@ pub struct Session {
     /// How much of the document this build could not read, held unchanged
     /// for every save to write back: what the window tells the person.
     unread: UnreadSummary,
+    /// The scene assets' probed pixel sizes, keyed by resolved path - the
+    /// cache [`concat_studio::expand_project_scenes`] reads and fills, so
+    /// a re-expansion does not re-read the files. Held for the session's
+    /// life, with a recorded trade-off: an asset swapped or deleted
+    /// *outside* the editor keeps serving its cached size from here, so a
+    /// mid-session external change makes the monitor (cached) and an
+    /// export thread (fresh local cache) disagree on whether such a layer
+    /// expands at all. Swapping via the editor changes the path; editing
+    /// in place only changes pixels, which are always read fresh.
+    scene_probes: std::sync::Mutex<HashMap<PathBuf, (u32, u32)>>,
 }
 
 /// What every mutating call returns: the authoritative state plus history
@@ -161,6 +174,7 @@ impl Session {
             upgraded,
             retired,
             unread,
+            scene_probes: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -346,19 +360,30 @@ impl Session {
     /// Scene clips expand first, into the camera-baked image clips of
     /// [`concat_studio::expand_project_scenes`] - the one expansion point
     /// for preview and export alike, so a scene plays through the monitor
-    /// exactly as it exports.
+    /// exactly as it exports. The scene assets' probed sizes live with the
+    /// session, so a re-expansion does not re-read the files.
     pub fn flattened_clips(&self) -> Vec<concat_export::ExportClip> {
         // `path` is the project folder; scene assets resolve against it,
         // as flatten's own media paths already do.
+        let mut probes = self.scene_probes.lock().unwrap_or_else(|e| e.into_inner());
         let expanded = concat_studio::expand_project_scenes(
             self.editor.project(),
             std::path::Path::new(&self.path),
+            &mut probes,
         );
+        drop(probes);
         concat_export::flatten::flatten_timeline_in(
             &expanded,
             None,
             Some(std::path::Path::new(&self.path)),
         )
+    }
+
+    /// The scene assets' probed pixel sizes, keyed by resolved path. Shared
+    /// by every expansion of this session; see
+    /// [`concat_studio::expand_project_scenes`].
+    pub fn scene_probes(&self) -> std::sync::MutexGuard<'_, HashMap<PathBuf, (u32, u32)>> {
+        self.scene_probes.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -557,7 +582,10 @@ mod tests {
     ];
 
     /// A two-layer scene: a background the whole way through and a
-    /// character over its second half, with the camera pushing in.
+    /// character over its second half, with the camera pushing in. The
+    /// layers sit at the world's centre - the default (0, 0) is the
+    /// world's top-left corner, which the camera at the centre does not
+    /// see, and a scene built like that renders "correctly" black.
     fn demo_scene() -> concat_scene::Scene {
         let mut scene = concat_scene::Scene::new("sc1", "Demo", 4000.0, 2250.0, 1920, 1080);
         scene.layers.push(concat_scene::SceneLayer {
@@ -565,7 +593,11 @@ mod tests {
             name: "背景".into(),
             kind: concat_scene::LayerKind::Background,
             asset: Some("bg.png".into()),
-            transform: Default::default(),
+            transform: concat_scene::SceneTransform {
+                x: 2000.0,
+                y: 1125.0,
+                ..Default::default()
+            },
             in_frame: 0.0,
             duration_frames: 0.0,
             opacity: 1.0,
@@ -578,7 +610,12 @@ mod tests {
             name: "主角".into(),
             kind: concat_scene::LayerKind::Character,
             asset: Some("hero.png".into()),
-            transform: Default::default(),
+            transform: concat_scene::SceneTransform {
+                x: 2000.0,
+                y: 1125.0,
+                scale: 0.65,
+                ..Default::default()
+            },
             in_frame: 30.0,
             duration_frames: 60.0,
             opacity: 1.0,
@@ -617,10 +654,12 @@ mod tests {
         )
         .expect("creates");
         // The project folder is what `create` minted under the scratch
-        // root, and where scene assets resolve from.
+        // root, and where scene assets resolve from. Only the background
+        // is on disk: the character's size is primed into the probe cache
+        // below, which is what proves the cache serves an expansion
+        // without re-reading the file.
         let folder = std::path::Path::new(&info.path);
         std::fs::write(folder.join("bg.png"), TINY_PNG).expect("bg asset");
-        std::fs::write(folder.join("hero.png"), TINY_PNG).expect("hero asset");
         let mut session = Session::open_info(&info).expect("opens");
         session
             .apply(Command::AddSceneClip {
@@ -631,6 +670,16 @@ mod tests {
                 name: None,
             })
             .expect("places the scene clip");
+
+        // The probed sizes live with the session: a second flattening (the
+        // next preview frame, the export) reads no file again - primed
+        // with the character's size, the expansion serves a layer whose
+        // file is not on disk at all, which is exactly what a re-read
+        // would have failed on.
+        {
+            let mut probes = session.scene_probes();
+            probes.insert(folder.join("hero.png"), (32, 32));
+        }
 
         let flattened = session.flattened_clips();
         assert!(
@@ -694,8 +743,20 @@ mod tests {
         // `create` mints the project folder under the root; the assets
         // live beside the manifest, where scene paths resolve from.
         let folder = std::path::Path::new(&info.path);
-        std::fs::write(folder.join("bg.png"), TINY_PNG).expect("bg asset");
-        std::fs::write(folder.join("hero.png"), TINY_PNG).expect("hero asset");
+        // Real, coloured assets - a fully transparent placeholder renders
+        // "correctly" and reads as a black pane, which is what the walk
+        // through this project is for. The camera demo's art, when it is
+        // there; the placeholder, when it is not (a checkout without the
+        // example's art still regenerates a working project).
+        let camera_assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/camera_demo/assets");
+        let put = |source: &str, dest: &str| {
+            let bytes = std::fs::read(camera_assets.join(source))
+                .unwrap_or_else(|_| TINY_PNG.to_vec());
+            std::fs::write(folder.join(dest), bytes).expect("asset");
+        };
+        put("bg.png", "bg.png");
+        put("char_a.png", "hero.png");
         let mut session = Session::open_info(&info).expect("opens");
         session
             .apply(Command::AddSceneClip {
