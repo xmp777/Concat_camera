@@ -1474,6 +1474,7 @@ dependencies = [
 name = "concat-studio"
 version = "0.2.12"
 dependencies = [
+ "concat-camera",
  "concat-export",
  "concat-media",
  "concat-project",

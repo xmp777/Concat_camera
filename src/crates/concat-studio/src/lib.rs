@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 
 use concat_export::{ExportRequest, PreviewFrameRequest, Reporter, render_on};
 use concat_media::{ReaderPool, probe};
+use concat_project::model::Project;
 use concat_scene::{LayerPlan, Scene, SceneLayer};
 use serde_json::{Value, json};
 
@@ -392,6 +393,211 @@ fn scene_clips_at(
     Ok(clips)
 }
 
+/// 把工程中的 Scene 片段展开为带相机动画的图像片段（预览与导出共用）。
+///
+/// 编辑器的预览与导出都从 `Session::flattened_clips()` 出发，而 flatten
+/// 只认识图片/视频/音频。这里在每个 Scene 片段的时间轴窗口内，把场景
+/// 图层（按 z 序）重建为图像片段：相机运动按窗口重新采样，烘焙为
+/// Scale/OffsetX/OffsetY/Rotation 关键帧（`at` 为片段内 0..=1，线性缓动
+/// ——采样已经走过场景相机轨道自身的缓动），交给 Concat 原有的合成器。
+/// 场景背景遵循 Concat 的 background 语义：仅当场景片段位于最下方图像
+/// 轨时，它展开出的片段才携带 `Background::Color`。图形图层（无素材）
+/// 与不可见图层跳过；场景缺失、无法解析或 `scene_id` 不匹配时按原样
+/// 返回——flatten 对 Scene 片段失败软跳过，该处画面为画布色。
+pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
+    use concat_project::model::{Background, Clip, ClipKey, ClipKind, KeyEase, KeyProperty};
+
+    let Some(scene) = project
+        .extra
+        .get(SCENE_KEY)
+        .and_then(|value| serde_json::from_value::<Scene>(value.clone()).ok())
+    else {
+        return project.clone();
+    };
+    let fps = scene.fps();
+    let (width, height) = viewport_of(&scene);
+    let scene_end = scene.duration_frames();
+
+    let mut media = project.media.clone();
+    let mut media_ids: HashMap<PathBuf, String> = HashMap::new();
+    let mut media_seq = 0usize;
+    let media_id_for = |path: PathBuf,
+                            media: &mut Vec<concat_project::model::MediaItem>,
+                            ids: &mut HashMap<PathBuf, String>,
+                            seq: &mut usize| -> String {
+        ids.get(&path).cloned().unwrap_or_else(|| {
+            let id = format!("scn{}", seq);
+            *seq += 1;
+            media.push(concat_project::model::MediaItem {
+                id: id.clone(),
+                path: path.to_string_lossy().into_owned(),
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                duration: None,
+                kind: concat_project::model::MediaKind::Image,
+                width: None,
+                height: None,
+                frame_rate: None,
+                frame_rate_fraction: None,
+                video_codec: None,
+                audio_codec: None,
+                has_audio: false,
+                audio_tracks: Vec::new(),
+                placeholder: false,
+                color_range: None,
+                color_space: Default::default(),
+                origin: None,
+                extra: Default::default(),
+            });
+            ids.insert(path.clone(), id.clone());
+            id
+        })
+    };
+
+    let mut probes: HashMap<PathBuf, (u32, u32)> = HashMap::new();
+    let mut expanded_timelines: Vec<std::sync::Arc<concat_project::model::Timeline>> =
+        Vec::new();
+    for timeline in project.timelines.iter() {
+        let mut clips: Vec<Clip> = Vec::new();
+        // 展开片段所在的轨；展开后统一决定哪条轨拿背景。
+        let mut scene_tracks: Vec<String> = Vec::new();
+        for clip in timeline.clips.iter() {
+            if clip.kind != ClipKind::Scene {
+                clips.push((**clip).clone());
+                continue;
+            }
+            if clip.scene_id.as_deref() != Some(scene.id.as_str()) {
+                continue;
+            }
+            let track_id = clip.track_id.clone();
+            let window = clip.duration.max(0.0);
+            let mut group: Vec<Clip> = Vec::new();
+            let mut ordered: Vec<&SceneLayer> = scene.layers.iter().collect();
+            ordered.sort_by_key(|layer| layer.z);
+            for layer in ordered {
+                if !layer.visible {
+                    continue; // 不可见图层不需要素材，缺素材也不能毁掉整场
+                }
+                let Some(asset) = layer.asset.as_ref() else {
+                    continue; // 图形图层需要素材化后才能进入导出
+                };
+                let path = resolve(project_dir, asset);
+                // 素材尺寸只影响合成器自己的适配；这里 probe 一次仅用于
+                // 失败早报，缓存跟随调用存活。
+                if media_size(&path, &mut probes).is_err() {
+                    continue; // 缺素材的图层与导出单场景一致：跳过而非失败
+                }
+                let layer_start = layer.in_frame.max(0.0) / fps;
+                let layer_frames = if layer.duration_frames > 0.0 {
+                    layer.duration_frames
+                } else {
+                    (scene_end - layer.in_frame.max(0.0)).max(1.0)
+                };
+                let layer_end = (layer.in_frame.max(0.0) + layer_frames) / fps;
+                let inter_start = layer_start.min(window);
+                let inter_end = layer_end.min(window);
+                if inter_end - inter_start <= 0.0 {
+                    continue;
+                }
+                let samples = sample_layer(
+                    &scene,
+                    layer,
+                    inter_start * fps,
+                    (inter_end - inter_start) * fps,
+                    width,
+                    height,
+                );
+                if samples.is_empty() {
+                    continue;
+                }
+                let mut out = Clip::blank(
+                    format!("{}-{}", clip.id, layer.id),
+                    track_id.clone(),
+                    ClipKind::Image,
+                    layer.name.clone(),
+                    clip.start + inter_start,
+                    inter_end - inter_start,
+                );
+                out.media_id = media_id_for(
+                    path,
+                    &mut media,
+                    &mut media_ids,
+                    &mut media_seq,
+                );
+                out.opacity = layer.opacity;
+                // 展开片段保留场景归属：既标记来源（背景轨判定用它），
+                // 也不让展开产物在二次展开时被再次当作 Scene 片段。
+                out.scene_id = Some(scene.id.clone());
+                // keyed 属性是绝对值；base 保持中性（Clip::blank），运动
+                // 全部走关键帧。
+                out.keys = samples
+                    .iter()
+                    .flat_map(|(at, plan)| {
+                        [
+                            (KeyProperty::OffsetX, plan.transform.offset_x),
+                            (KeyProperty::OffsetY, plan.transform.offset_y),
+                            (KeyProperty::Scale, plan.transform.scale),
+                            (KeyProperty::Rotation, plan.transform.rotation),
+                        ]
+                        .into_iter()
+                        .map(move |(property, value)| ClipKey {
+                            property,
+                            at: *at,
+                            value,
+                            ease: KeyEase::LINEAR,
+                        })
+                    })
+                    .collect();
+                group.push(out);
+            }
+            if !group.is_empty() {
+                scene_tracks.push(track_id);
+                clips.extend(group);
+            }
+        }
+        let mut expanded = (**timeline).clone();
+        expanded.clips = clips.into_iter().map(std::sync::Arc::new).collect();
+        // 场景背景只在最下方图像轨生效——与一个真正的图像片段完全同规。
+        let lane = expanded.background_lane().map(str::to_owned);
+        if let Some(lane) = lane
+            && scene_tracks.iter().any(|track| *track == lane)
+        {
+            let color = scene_background_hex(&scene);
+            for clip in expanded.clips.iter_mut() {
+                let clip = std::sync::Arc::make_mut(clip);
+                if clip.track_id == lane && clip.scene_id.as_deref() == Some(scene.id.as_str()) {
+                    clip.background = Some(Background::Color {
+                        color: color.clone(),
+                    });
+                }
+            }
+        }
+        expanded_timelines.push(std::sync::Arc::new(expanded));
+    }
+
+    Project {
+        media,
+        fonts: project.fonts.clone(),
+        timelines: expanded_timelines,
+        active_timeline_id: project.active_timeline_id.clone(),
+        extra: project.extra.clone(),
+        unread: project.unread.clone(),
+    }
+}
+
+/// 场景背景的 `#rrggbb`，透明按黑处理（合成器画布语义）。
+fn scene_background_hex(scene: &Scene) -> String {
+    let [r, g, b, _a] = scene.background;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
 fn media_size(
     path: &Path,
     probes: &mut HashMap<PathBuf, (u32, u32)>,
@@ -473,6 +679,19 @@ fn sample_layer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一张真实的 1×1 PNG：probe 与合成器都要能读它。
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+        0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    fn write_asset(dir: &Path, name: &str) {
+        std::fs::write(dir.join(name), TINY_PNG).unwrap();
+    }
 
     #[test]
     fn scenes_roundtrip_bare_and_inside_a_concat_project() {
@@ -593,5 +812,201 @@ mod tests {
             .preview_frame(&scene, &demo, 89.0, 960, 540)
             .expect("later frame");
         assert_ne!(cached.pixels, later.pixels, "the camera moved");
+    }
+
+    /// 一个双图层场景片段（背景全程 + 角色后半段进出场）展开为两个图像
+    /// 片段：位置/时长按时间轴窗口换算，相机运动烘焙为线性关键帧，素材
+    /// 落进合成 media 项，展开片段保留场景归属。
+    #[test]
+    fn a_scene_clip_expands_to_layer_clips_with_camera_keys() {
+        use concat_project::{Command, Editor};
+
+        let mut scene = Scene::new("sc1", "展开", 4000.0, 2250.0, 1920, 1080);
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "bg".into(),
+            name: "背景".into(),
+            kind: concat_scene::LayerKind::Background,
+            asset: Some("bg.png".into()),
+            transform: Default::default(),
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        });
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "hero".into(),
+            name: "主角".into(),
+            kind: concat_scene::LayerKind::Character,
+            asset: Some("hero.png".into()),
+            transform: Default::default(),
+            in_frame: 30.0,
+            duration_frames: 60.0,
+            opacity: 1.0,
+            visible: true,
+            z: 1,
+            expression: None,
+        });
+        // 推近：zoom 1.0 → 2.0。相机尾帧计入场景时长（91 帧 → 3.033s）。
+        scene.camera.add_key(
+            90.0,
+            concat_camera::VirtualCamera {
+                zoom: 2.0,
+                ..scene.camera.pose_at(90.0)
+            },
+            concat_scene::Easing::LINEAR,
+        );
+        let scene_seconds = scene.duration_frames() / scene.fps();
+
+        let mut editor = Editor::new();
+        let clip_id = editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 1.0,
+                scene: scene.clone(),
+                name: None,
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        let project = editor.project();
+        // 素材在工程目录下（相对路径按工程目录解析）。
+        let dir = std::env::temp_dir().join(format!("concat-studio-expand-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_asset(&dir, "bg.png");
+        write_asset(&dir, "hero.png");
+
+        let expanded = expand_project_scenes(project, &dir);
+        let timeline = expanded.active();
+        // 展开替换了 Scene 片段本身：flatten 对 Scene 失败软跳过，替换
+        // 后那里就是真实的图像片段。
+        assert!(timeline.clip(&clip_id).is_none(), "the scene clip is consumed");
+
+        let image_clips: Vec<_> = timeline
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == concat_project::model::ClipKind::Image)
+            .collect();
+        assert_eq!(image_clips.len(), 2, "两个图层各展开为一个图像片段");
+        // 背景层：场景本地 [0s, scene_seconds] → 时间轴 [1s, 1+scene_seconds]。
+        let background = image_clips
+            .iter()
+            .find(|clip| (clip.duration - scene_seconds).abs() < 1e-9)
+            .expect("the background expands across the whole window");
+        assert!((background.start - 1.0).abs() < 1e-9);
+        // 角色层：本地 [1s, 3s] → 时间轴 [2s, 4s]。
+        let hero = image_clips
+            .iter()
+            .find(|clip| (clip.duration - 2.0).abs() < 1e-9)
+            .expect("the character expands over its own span");
+        assert!((hero.start - 2.0).abs() < 1e-9);
+        for clip in [&background, &hero] {
+            assert_eq!(clip.scene_id.as_deref(), Some("sc1"), "provenance kept");
+            assert!(
+                expanded
+                    .media
+                    .iter()
+                    .any(|item| item.id == clip.media_id && item.kind == concat_project::model::MediaKind::Image),
+                "the synthetic media item exists"
+            );
+            // 相机推近：scale 关键帧首尾不同（1/zoom 与 1/2zoom 的差异由
+            // 投影决定，这里只断言"运动被烘焙了"）。
+            let scales: Vec<_> = clip
+                .keys
+                .iter()
+                .filter(|key| key.property == concat_project::model::KeyProperty::Scale)
+                .collect();
+            assert!(scales.len() >= 2, "camera motion baked as keys");
+            assert_ne!(scales[0].value, scales[scales.len() - 1].value);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 被裁短的 Scene 片段限制展开窗口：窗口外的图层不出现，跨窗口边
+    /// 界的图层被截到窗口内。
+    #[test]
+    fn a_trimmed_scene_clip_limits_the_window() {
+        use concat_project::{Command, Editor};
+
+        let mut scene = Scene::new("sc1", "窗口", 4000.0, 2250.0, 1920, 1080);
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "bg".into(),
+            name: "背景".into(),
+            kind: concat_scene::LayerKind::Background,
+            asset: Some("bg.png".into()),
+            transform: Default::default(),
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        });
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "late".into(),
+            name: "晚进场".into(),
+            kind: concat_scene::LayerKind::Prop,
+            asset: Some("prop.png".into()),
+            transform: Default::default(),
+            in_frame: 60.0,
+            duration_frames: 30.0,
+            opacity: 1.0,
+            visible: true,
+            z: 1,
+            expression: None,
+        });
+
+        let mut editor = Editor::new();
+        editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 0.0,
+                scene,
+                name: None,
+            })
+            .unwrap();
+        // 命令里的时长来自场景（3s）；裁到 1.5s。
+        let clip_id = editor.project().active().clips[0].id.clone();
+        editor
+            .apply(Command::TrimClip {
+                clip_id,
+                edge: concat_project::commands::TrimEdge::End,
+                delta: -1.5,
+                ripple: false,
+            })
+            .unwrap();
+        let project = editor.project();
+        let dir = std::env::temp_dir().join(format!("concat-studio-window-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_asset(&dir, "bg.png");
+        write_asset(&dir, "prop.png");
+
+        let expanded = expand_project_scenes(project, &dir);
+        let timeline = expanded.active();
+        let image_clips: Vec<_> = timeline
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == concat_project::model::ClipKind::Image)
+            .collect();
+        assert_eq!(image_clips.len(), 1, "晚进场的图层在窗口外，不展开");
+        assert!(
+            (image_clips[0].duration - 1.5).abs() < 1e-9,
+            "背景截到窗口长"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 没有场景的工程原样返回：展开是增量的，不是必须的。
+    #[test]
+    fn a_project_without_a_scene_is_returned_unchanged() {
+        use concat_project::Editor;
+
+        let editor = Editor::new();
+        let project = editor.project();
+        let expanded = expand_project_scenes(project, std::path::Path::new("."));
+        assert_eq!(expanded, *project);
     }
 }

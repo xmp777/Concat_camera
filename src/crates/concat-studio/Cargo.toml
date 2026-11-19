@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+concat-camera.workspace = true
 concat-scene.workspace = true
 concat-project.workspace = true
 concat-export.workspace = true
