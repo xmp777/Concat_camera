@@ -36,13 +36,17 @@ impl Studio {
     }
 
     /// One number on the Camera tab: a key on the scene's camera track at
-    /// the playhead mapped into the selected scene clip. The other fields
-    /// keep the pose the track evaluates - a zoom typed alone does not
-    /// move the lens - and the whole dial folds into one undo step, like
-    /// any knob's gesture.
+    /// the playhead mapped into the selected scene clip. Only the touched
+    /// field rides in - the others keep what the track evaluates, so a
+    /// zoom typed between two keys does not freeze the interpolated
+    /// motion into a hard corner. The whole dial folds into one undo
+    /// step, like any knob's gesture.
     fn scene_camera_set(
         &mut self,
-        pose_of: impl FnOnce(concat_camera::VirtualCamera) -> concat_camera::VirtualCamera,
+        x: Option<f64>,
+        y: Option<f64>,
+        zoom: Option<f64>,
+        rotation: Option<f64>,
     ) {
         let Some(clip) = self
             .edit_targets()
@@ -57,15 +61,15 @@ impl Studio {
         }
         let local = (f64::from(self.playhead) - clip.start).clamp(0.0, clip.duration)
             * self.project_scene().fps();
-        let pose = pose_of(self.scene_camera_pose_at(&clip));
+        self.scene_gesture_gate();
         self.apply_within(
             "scene-camera-inspector",
             Command::SetSceneCameraKey {
                 frame: local,
-                x: Some(pose.x),
-                y: Some(pose.y),
-                zoom: Some(pose.zoom),
-                rotation: Some(pose.rotation),
+                x,
+                y,
+                zoom,
+                rotation,
                 easing: None,
             },
         );
@@ -94,35 +98,23 @@ impl Studio {
     /// accumulated edits into commands.
     pub fn clip_set(&mut self, field: ClipField, value: f32) {
         // The scene clip's camera rows are keys on the scene's track, not
-        // clip fields - the document's scene is what changes.
+        // clip fields - the document's scene is what changes. The row
+        // rides in degrees; the camera keeps radians.
         match field {
             ClipField::CameraX => {
-                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
-                    x: f64::from(value),
-                    ..pose
-                });
+                self.scene_camera_set(Some(f64::from(value)), None, None, None);
                 return;
             }
             ClipField::CameraY => {
-                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
-                    y: f64::from(value),
-                    ..pose
-                });
+                self.scene_camera_set(None, Some(f64::from(value)), None, None);
                 return;
             }
             ClipField::CameraZoom => {
-                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
-                    zoom: f64::from(value),
-                    ..pose
-                });
+                self.scene_camera_set(None, None, Some(f64::from(value)), None);
                 return;
             }
-            // The row rides in degrees; the camera keeps radians.
             ClipField::CameraRotation => {
-                self.scene_camera_set(|pose| concat_camera::VirtualCamera {
-                    rotation: f64::from(value).to_radians(),
-                    ..pose
-                });
+                self.scene_camera_set(None, None, None, Some(f64::from(value).to_radians()));
                 return;
             }
             _ => {}

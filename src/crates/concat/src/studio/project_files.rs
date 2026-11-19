@@ -180,6 +180,10 @@ impl Studio {
                 self.ensure_stabilizers();
                 self.ensure_voices();
                 self.ensure_regions();
+                // The scene pane takes the project's scene from the
+                // document as it opens, so the Camera tab and the pane's
+                // insert button are live without a playhead tick first.
+                self.sync_scene_pane();
 
                 // Effects this build no longer has, named once as the project
                 // opens: their links stay in the clips, marked not installed.
@@ -568,9 +572,19 @@ impl Studio {
                 self.monitor = pane;
             }
             crate::panes::Msg::Scene(msg) => {
+                // The slot holds a placeholder while the pane updates, so
+                // a sync asked inside - a camera drag applying its
+                // command - must not write the placeholder. Restored, the
+                // queued sync lands on the real pane.
+                self.scene_slot_taken = true;
                 let mut pane = std::mem::take(&mut self.scene);
                 pane.update(msg, self);
                 self.scene = pane;
+                self.scene_slot_taken = false;
+                if self.scene_sync_pending {
+                    self.scene_sync_pending = false;
+                    self.sync_scene_pane();
+                }
             }
             crate::panes::Msg::Timeline(msg) => {
                 let mut pane = std::mem::take(&mut self.lanes);

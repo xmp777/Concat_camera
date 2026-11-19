@@ -50,8 +50,13 @@ impl Studio {
         let clips = if cached {
             std::sync::Arc::clone(&self.flat.as_ref().expect("checked").3)
         } else {
+            // Scene clips expand first, the same expansion the export's
+            // request_for runs - the monitor shows the scene as it will
+            // export. Cached with the revision like the flatten itself.
+            let expanded =
+                concat_studio::expand_project_scenes(self.project(), &project_dir);
             let mut clips = concat_export::flatten::flatten_timeline_in(
-                self.project(),
+                &expanded,
                 None,
                 Some(&project_dir),
             );

@@ -137,6 +137,12 @@ impl ScenePane {
             SceneMsg::DragEnded => {
                 if self.dragging {
                     self.dragging = false;
+                    // The project scene's drag was one gesture; the
+                    // document's undo step closes here. A standalone
+                    // scene edits no document, so it has no gesture.
+                    if self.embedded() {
+                        studio.end_scene_gesture();
+                    }
                     self.request(self.frame, false);
                 }
             }
@@ -148,6 +154,21 @@ impl ScenePane {
     /// Whether a scene is open. Drives the Save button.
     pub fn has_scene(&self) -> bool {
         self.state.is_some()
+    }
+
+    /// True when the open scene is the project's own document field -
+    /// the pane follows the document, and its edits go through the
+    /// command stack - rather than a standalone file.
+    fn embedded(&self) -> bool {
+        self.state.as_ref().map(|state| state.path.is_none()) == Some(true)
+    }
+
+    /// The open scene's id, for rules that compare it to the timeline's
+    /// scene clips; None with no scene open.
+    pub fn scene_id(&self) -> Option<String> {
+        let state = self.state.as_ref()?;
+        let scene = state.scene.read().unwrap_or_else(|p| p.into_inner());
+        Some(scene.id.clone())
     }
 
     /// The open scene's duration in seconds, for the slider fallback.
@@ -228,15 +249,18 @@ impl ScenePane {
             .extra
             .get(concat_studio::SCENE_KEY)
             .and_then(|value| serde_json::from_value::<Scene>(value.clone()).ok());
+        // `Some(false)` is a standalone file - the pane's own, which the
+        // document never overwrites; `Some(true)` is the embedded mode
+        // this sync drives.
         let embedded = self.state.as_ref().map(|state| state.path.is_none());
         match (embedded, parsed) {
             // The user's own file: not the project's to overwrite.
-            (Some(true), _) => {}
+            (Some(false), _) => {}
             // No scene anywhere, and none embedded before: nothing to do.
             (None, None) => {}
             // The scene is gone from the project (an undo of the embed):
             // the pane lets go of it.
-            (_, None) => {
+            (Some(true), None) => {
                 self.generation += 1;
                 self.state = None;
                 self.image = slint::Image::default();
@@ -247,25 +271,32 @@ impl ScenePane {
                 self.status = "Open a scene to preview it.".into();
             }
             (_, Some(scene)) => {
-                let changed = match self.state.as_ref() {
+                let (changed, replaced) = match self.state.as_ref() {
                     Some(state) if state.path.is_none() => {
-                        *state.scene.write().unwrap_or_else(|p| p.into_inner()) != scene
+                        let changed =
+                            *state.scene.read().unwrap_or_else(|p| p.into_inner()) != scene;
+                        (changed, false)
                     }
-                    _ => true,
+                    _ => (true, true),
                 };
                 let frame = self.frame;
-                match self.state.as_ref() {
-                    Some(state) if state.path.is_none() => {
-                        *state.scene.write().unwrap_or_else(|p| p.into_inner()) = scene.clone();
-                    }
-                    _ => {
-                        self.state = Some(Arc::new(SceneState {
-                            path: None,
-                            dir: project_dir.to_path_buf(),
-                            scene: RwLock::new(scene.clone()),
-                            previewer: Mutex::new(ScenePreviewer::new()),
-                        }));
-                    }
+                if replaced {
+                    // A new source: renders from the old one must not land.
+                    self.generation += 1;
+                    self.state = Some(Arc::new(SceneState {
+                        path: None,
+                        dir: project_dir.to_path_buf(),
+                        scene: RwLock::new(scene.clone()),
+                        previewer: Mutex::new(ScenePreviewer::new()),
+                    }));
+                } else {
+                    *self
+                        .state
+                        .as_ref()
+                        .expect("embedded, checked above")
+                        .scene
+                        .write()
+                        .unwrap_or_else(|p| p.into_inner()) = scene.clone();
                 }
                 self.max_frame = (scene.duration_frames().ceil() as i32 - 1).max(0);
                 self.frame = frame.clamp(0.0, self.max_frame as f32);
@@ -285,9 +316,33 @@ impl ScenePane {
         let pose = scene.camera.pose_at(f64::from(self.frame));
         drop(scene);
         let (world_dx, world_dy) = drag_world_delta(&pose, dx, dy);
-        // The camera edit goes through the command stack, like every
-        // other edit: undoable, autosaved, and mirrored into the
-        // document. The whole drag folds into one undo step.
+        if state.path.is_some() {
+            // A standalone scene edits its own file's copy, as it did
+            // before scenes lived in the project; Save writes it. The
+            // document's scene - which the command stack reaches - is
+            // someone else's, and a drag must not touch it.
+            let mut scene = state.scene.write().unwrap_or_else(|p| p.into_inner());
+            let mut moved = pose;
+            moved.x -= world_dx;
+            moved.y -= world_dy;
+            let easing = scene
+                .camera
+                .keys
+                .iter()
+                .find(|key| (key.frame - f64::from(self.frame)).abs() < 1e-9)
+                .map(|key| key.easing)
+                .unwrap_or(concat_scene::Easing::LINEAR);
+            scene.camera.add_key(f64::from(self.frame), moved, easing);
+            drop(scene);
+            self.request(self.frame, true);
+            return;
+        }
+        // The project's scene: the camera edit goes through the command
+        // stack, like every other edit - undoable, autosaved, mirrored
+        // into the document. The whole drag folds into one undo step,
+        // closed at DragEnded; the pane follows through the sync the
+        // applied command already queued.
+        studio.scene_gesture_gate();
         studio.apply_within(
             "scene-camera-drag",
             concat_project::Command::SetSceneCameraKey {
@@ -299,10 +354,6 @@ impl ScenePane {
                 easing: None,
             },
         );
-        // The document now holds the new pose; pick it up right away so
-        // the drag's own coarse frame shows the camera that moved.
-        studio.sync_scene_pane();
-        self.request(self.frame, true);
     }
 
     fn save(&mut self, studio: &Studio) {
@@ -334,6 +385,10 @@ impl ScenePane {
             self.status = "Open a scene first.".into();
             return;
         };
+        if studio.session.is_none() {
+            self.status = "Open a project first.".into();
+            return;
+        }
         let scene = state.scene.read().unwrap_or_else(|p| p.into_inner()).clone();
         let start = f64::from(studio.playhead);
         studio.apply(concat_project::Command::AddSceneClip {
@@ -356,7 +411,9 @@ impl ScenePane {
         };
         let scene = state.scene.read().unwrap_or_else(|p| p.into_inner());
         let fps = scene.fps();
-        let max = scene.duration_frames();
+        // The last frame is an index, one below the frame count the
+        // duration names - the same convention the slider's maximum has.
+        let max = (scene.duration_frames() - 1.0).max(0.0);
         let owned: Vec<(f64, f64)> = scene_clips
             .iter()
             .filter(|(id, _, _)| state.path.is_none() && *id == scene.id)
@@ -614,15 +671,18 @@ mod tests {
     #[test]
     fn the_playhead_maps_to_the_scene_clips_local_time() {
         let fps = 30.0;
-        let max = 90.0;
+        // The caller passes the last frame's index - one below the count
+        // the scene's duration names - as `follow_playhead` does.
+        let max = 89.0;
         // One clip from 2s to 5s.
         let clips = vec![(2.0, 3.0)];
         assert_eq!(scene_frame_at(&clips, 2.0, fps, max), 0.0);
         assert_eq!(scene_frame_at(&clips, 3.5, fps, max), 45.0);
         assert_eq!(scene_frame_at(&clips, 4.99, fps, max), 89.0);
-        // Before it: the head frame. After it: the last frame.
+        // Before it: the head frame. After it: the last frame index, one
+        // below the count the duration names.
         assert_eq!(scene_frame_at(&clips, 0.0, fps, max), 0.0);
-        assert_eq!(scene_frame_at(&clips, 10.0, fps, max), 90.0);
+        assert_eq!(scene_frame_at(&clips, 10.0, fps, max), 89.0);
         // Two clips: nearest boundary wins. The first clip's tail frame is
         // its own length at the scene's rate (1s × 30fps), not the
         // scene's last frame - only a clip reaching the scene's end does.
@@ -633,7 +693,7 @@ mod tests {
         let clips = vec![(0.0, 1.5)];
         assert_eq!(scene_frame_at(&clips, 1.4, fps, max), 42.0);
         // No clip of this scene: the timeline is the scene's clock, as a
-        // standalone scene always was - clamped to the scene's own length.
-        assert_eq!(scene_frame_at(&[], 5.0, fps, max), 90.0);
+        // standalone scene always was - clamped to the last frame index.
+        assert_eq!(scene_frame_at(&[], 5.0, fps, max), 89.0);
     }
 }

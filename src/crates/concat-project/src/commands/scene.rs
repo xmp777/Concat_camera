@@ -43,12 +43,21 @@ pub(super) fn apply(
         } => {
             let duration =
                 (scene.duration_frames() / scene.fps()).max(super::MIN_CLIP_DURATION);
-            // Embed the scene, or accept the one the document already
-            // holds when it is the same one. A different one errs: two
-            // scenes in one document is the `scenes` map's business, not
-            // a second top-level field's. This runs before the timeline
-            // is borrowed, so the two mutable borrows of `project` never
-            // overlap.
+            // The track resolves first: a command that errs must leave the
+            // project untouched, and embedding the scene before a
+            // `TrackGone` refusal would strand it in the document with no
+            // undo step to take it back. The embed then runs before the
+            // timeline is borrowed, so the two mutable borrows of
+            // `project` never overlap.
+            {
+                let timeline = project.active();
+                match &track_id {
+                    Some(id) if timeline.track(id).is_none() => {
+                        return Err(CommandError::TrackGone);
+                    }
+                    _ => {}
+                }
+            }
             match read_scene(project) {
                 Ok(existing) if existing.id == scene.id => {}
                 Ok(_) => return Err(CommandError::SceneMismatch),
@@ -62,8 +71,8 @@ pub(super) fn apply(
             }
             let timeline = project.active_mut();
             let track_id = match track_id {
-                Some(id) if timeline.track(&id).is_some() => id,
-                Some(_) => return Err(CommandError::TrackGone),
+                // Validated above against the same timeline.
+                Some(id) => id,
                 // Every lane above the video is taken: a new one at the
                 // top for the scene to land on.
                 None if above => super::clips::first_free_track_above(timeline, start, duration)

@@ -641,7 +641,9 @@ mod tests {
         );
         assert_eq!(flattened.len(), 2, "one clip per visible layer");
         // The background spans the clip's whole window from its start; the
-        // character rides its second half.
+        // character rides its second half. The compositor reads one clip
+        // per track at a moment, so the two layers must ride two tracks -
+        // a shared track would leave only the top layer on screen.
         let (bg, hero) = (
             flattened
                 .iter()
@@ -652,6 +654,7 @@ mod tests {
                 .find(|clip| clip.duration <= 3.0)
                 .expect("the character clip"),
         );
+        assert_ne!(bg.track, hero.track, "one compositor track per layer");
         assert!((bg.start - 1.0).abs() < 1e-9);
         assert!((bg.duration - 91.0 / 30.0).abs() < 1e-6, "91 frames at 30");
         assert!((hero.start - 2.0).abs() < 1e-9);

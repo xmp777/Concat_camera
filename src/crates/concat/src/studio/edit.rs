@@ -475,6 +475,12 @@ impl Studio {
         self.ensure_stabilizers();
         self.ensure_voices();
         self.ensure_regions();
+        // The scene pane follows the document's scene: an edit made
+        // anywhere - undo, an agent, an inspector knob - is on its screen
+        // without waiting for a playhead tick. Gated on the revision, and
+        // queued past a taken-out pane slot (a scene drag applying its
+        // command runs inside `after_change`).
+        self.sync_scene_pane();
     }
 
     pub fn undo(&mut self) {

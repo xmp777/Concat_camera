@@ -1217,15 +1217,18 @@ impl Studio {
         let at = place_in(clip, self.playhead);
         // The scene clip's camera at the playhead mapped into the clip,
         // from the project's scene; degrees for rotation, as the row shows
-        // it. The Camera tab is a scene clip's whole inspector.
-        let camera = self.scene_camera_pose_at(clip);
+        // it - normalized to (-180, 180], the range the row clamps to. A
+        // non-scene clip never pays for the scene parse.
         let (camera_x, camera_y, camera_zoom, camera_rotation) = if clip.kind == model::ClipKind::Scene
         {
+            let camera = self.scene_camera_pose_at(clip);
+            let deg = camera.rotation.to_degrees();
+            let deg = ((deg + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
             (
                 camera.x as f32,
                 camera.y as f32,
                 camera.zoom as f32,
-                camera.rotation.to_degrees() as f32,
+                deg as f32,
             )
         } else {
             (0.0, 0.0, 1.0, 0.0)

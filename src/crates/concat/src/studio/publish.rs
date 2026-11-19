@@ -216,25 +216,29 @@ impl Studio {
         scene.set_status(self.scene.status.clone());
         scene.set_has_scene(self.scene.has_scene());
         // The fallback slider is for a scene the timeline does not carry:
-        // a scene clip on the lanes drives the frame from the playhead, so
-        // the slider would fight it. A standalone scene over a shorter
+        // a scene clip playing *this* scene drives the frame from the
+        // playhead, so the slider would fight it. A standalone scene - or
+        // one the timeline's clips never reference - over a shorter
         // timeline keeps its own slider, as it did before clips existed.
-        let timeline_has_scene_clip = self
-            .session
-            .as_ref()
-            .is_some_and(|session| {
+        let pane_scene = self.scene.scene_id();
+        let timeline_has_own_clip = self.session.as_ref().is_some_and(|session| {
+            pane_scene.is_some_and(|id| {
                 session
                     .project()
                     .active()
                     .clips
                     .iter()
-                    .any(|clip| clip.kind == model::ClipKind::Scene)
-            });
+                    .any(|clip| {
+                        clip.kind == model::ClipKind::Scene
+                            && clip.scene_id.as_deref() == Some(id.as_str())
+                    })
+            })
+        });
         let scene_seconds = self.scene.duration_seconds().unwrap_or(0.0);
         let timeline_seconds = f64::from(self.duration());
         scene.set_show_frame_slider(
             self.scene.has_scene()
-                && !timeline_has_scene_clip
+                && !timeline_has_own_clip
                 && timeline_seconds + 0.05 < scene_seconds,
         );
     }

@@ -426,7 +426,13 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                             ids: &mut HashMap<PathBuf, String>,
                             seq: &mut usize| -> String {
         ids.get(&path).cloned().unwrap_or_else(|| {
-            let id = format!("scn{}", seq);
+            // `scn` 前缀在 "m" 命名空间之外；即便工程里手工造过同名的
+            // 素材项，也递增到没有碰撞为止——flatten 按首个 id 匹配。
+            let mut id = format!("scn{}", seq);
+            while media.iter().any(|item| item.id == id) {
+                *seq += 1;
+                id = format!("scn{}", seq);
+            }
             *seq += 1;
             media.push(concat_project::model::MediaItem {
                 id: id.clone(),
@@ -460,6 +466,7 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
     let mut expanded_timelines: Vec<std::sync::Arc<concat_project::model::Timeline>> =
         Vec::new();
     for timeline in project.timelines.iter() {
+        let mut tracks = timeline.tracks.clone();
         let mut clips: Vec<Clip> = Vec::new();
         // 展开片段所在的轨；展开后统一决定哪条轨拿背景。
         let mut scene_tracks: Vec<String> = Vec::new();
@@ -469,14 +476,20 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                 continue;
             }
             if clip.scene_id.as_deref() != Some(scene.id.as_str()) {
+                // 指向别的场景：工程只有一个场景，该片段渲染为无——从
+                // 展开后的时间线里移除，而不是留下一个 flatten 会跳过、
+                // 位置上却是空洞的片段。
                 continue;
             }
-            let track_id = clip.track_id.clone();
             let window = clip.duration.max(0.0);
-            let mut group: Vec<Clip> = Vec::new();
             let mut ordered: Vec<&SceneLayer> = scene.layers.iter().collect();
             ordered.sort_by_key(|layer| layer.z);
-            for layer in ordered {
+            // 合成器每条轨在同一时刻只认一个 clip（后者覆盖前者）——
+            // 场景的图层必须各占一条轨：最低 z 的一层留在场景片段的原
+            // 轨（背景轨语义随它走），其余每层在其上各 mint 一条新轨，
+            // 顺序与 z 一致。
+            let mut group: Vec<(String, Clip)> = Vec::new();
+            for (index, layer) in ordered.iter().enumerate() {
                 if !layer.visible {
                     continue; // 不可见图层不需要素材，缺素材也不能毁掉整场
                 }
@@ -512,9 +525,23 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                 if samples.is_empty() {
                     continue;
                 }
+                let layer_track = if index == 0 {
+                    clip.track_id.clone()
+                } else {
+                    let id = format!("{}-{}-{}", clip.track_id, clip.id, layer.id);
+                    if !tracks.iter().any(|track| track.id == id) {
+                        tracks.push(concat_project::model::Track {
+                            id: id.clone(),
+                            visible: true,
+                            muted: false,
+                            extra: Default::default(),
+                        });
+                    }
+                    id
+                };
                 let mut out = Clip::blank(
                     format!("{}-{}", clip.id, layer.id),
-                    track_id.clone(),
+                    layer_track.clone(),
                     ClipKind::Image,
                     layer.name.clone(),
                     clip.start + inter_start,
@@ -531,7 +558,7 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                 // 也不让展开产物在二次展开时被再次当作 Scene 片段。
                 out.scene_id = Some(scene.id.clone());
                 // keyed 属性是绝对值；base 保持中性（Clip::blank），运动
-                // 全部走关键帧。
+                // 全部走关键帧——相机投影与图层自身的非均匀拉伸都在其列。
                 out.keys = samples
                     .iter()
                     .flat_map(|(at, plan)| {
@@ -540,6 +567,8 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                             (KeyProperty::OffsetY, plan.transform.offset_y),
                             (KeyProperty::Scale, plan.transform.scale),
                             (KeyProperty::Rotation, plan.transform.rotation),
+                            (KeyProperty::StretchX, plan.transform.stretch_x),
+                            (KeyProperty::StretchY, plan.transform.stretch_y),
                         ]
                         .into_iter()
                         .map(move |(property, value)| ClipKey {
@@ -550,14 +579,15 @@ pub fn expand_project_scenes(project: &Project, project_dir: &Path) -> Project {
                         })
                     })
                     .collect();
-                group.push(out);
+                group.push((layer_track, out));
             }
             if !group.is_empty() {
-                scene_tracks.push(track_id);
-                clips.extend(group);
+                scene_tracks.extend(group.iter().map(|(track, _)| track.clone()));
+                clips.extend(group.into_iter().map(|(_, clip)| clip));
             }
         }
         let mut expanded = (**timeline).clone();
+        expanded.tracks = tracks;
         expanded.clips = clips.into_iter().map(std::sync::Arc::new).collect();
         // 场景背景只在最下方图像轨生效——与一个真正的图像片段完全同规。
         let lane = expanded.background_lane().map(str::to_owned);
@@ -890,19 +920,37 @@ mod tests {
             .filter(|clip| clip.kind == concat_project::model::ClipKind::Image)
             .collect();
         assert_eq!(image_clips.len(), 2, "两个图层各展开为一个图像片段");
-        // 背景层：场景本地 [0s, scene_seconds] → 时间轴 [1s, 1+scene_seconds]。
-        let background = image_clips
-            .iter()
-            .find(|clip| (clip.duration - scene_seconds).abs() < 1e-9)
-            .expect("the background expands across the whole window");
-        assert!((background.start - 1.0).abs() < 1e-9);
+        // 合成器每轨在同一时刻只认一个 clip：两层必须各占一条轨，否则
+        // 低 z 层整体消失（审查实机复现过）。
+        let (bg, hero) = (
+            image_clips
+                .iter()
+                .find(|clip| (clip.duration - scene_seconds).abs() < 1e-9)
+                .expect("the background clip"),
+            image_clips
+                .iter()
+                .find(|clip| (clip.duration - 2.0).abs() < 1e-9)
+                .expect("the hero clip"),
+        );
+        assert_ne!(bg.track_id, hero.track_id, "one track per layer");
+        assert!(
+            timeline
+                .tracks
+                .iter()
+                .any(|track| track.id.ends_with("-hero")),
+            "the character rides a minted track of its own"
+        );
+        // 非均匀拉伸也随投影进关键帧，不悄悄拉直。
+        assert!(
+            hero.keys
+                .iter()
+                .any(|key| key.property == concat_project::model::KeyProperty::StretchX)
+        );
+        // 背景层：场景本地 [0s, scene_seconds] → 时间轴 [1s, 1+scene_seconds]；
         // 角色层：本地 [1s, 3s] → 时间轴 [2s, 4s]。
-        let hero = image_clips
-            .iter()
-            .find(|clip| (clip.duration - 2.0).abs() < 1e-9)
-            .expect("the character expands over its own span");
+        assert!((bg.start - 1.0).abs() < 1e-9);
         assert!((hero.start - 2.0).abs() < 1e-9);
-        for clip in [&background, &hero] {
+        for clip in [bg, hero] {
             assert_eq!(clip.scene_id.as_deref(), Some("sc1"), "provenance kept");
             assert!(
                 expanded

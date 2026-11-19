@@ -83,7 +83,12 @@ pub fn request_for(
     titles: Vec<ExportClip>,
 ) -> ExportRequest {
     let video = project.active().video;
-    let mut clips = concat_export::flatten::flatten_timeline_in(project, None, Some(project_dir));
+    // Scene clips expand first, into the camera-baked image clips of
+    // `expand_project_scenes` - the same expansion the preview seam runs -
+    // so an export renders the scene exactly as the monitor shows it.
+    let expanded = concat_studio::expand_project_scenes(project, project_dir);
+    let mut clips =
+        concat_export::flatten::flatten_timeline_in(&expanded, None, Some(project_dir));
     clips.extend(titles);
     ExportRequest {
         output: spec.output.clone(),

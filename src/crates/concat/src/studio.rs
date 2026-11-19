@@ -1094,6 +1094,19 @@ pub struct Studio {
     pub monitor: crate::panes::monitor::MonitorPane,
     /// The 2D scene view: a scene frame and its camera.
     pub scene: crate::panes::scene::ScenePane,
+    /// True inside a `Msg::Scene` update, while the `scene` slot holds the
+    /// taken-out pane and a sync must not touch the placeholder. See
+    /// `queue_scene_sync`.
+    pub(crate) scene_slot_taken: bool,
+    /// A sync asked for while the slot was taken, honoured once the pane
+    /// is back.
+    scene_sync_pending: bool,
+    /// The revision the scene pane last took the document's scene at; a
+    /// sync between revisions would parse the scene JSON for nothing.
+    scene_synced_revision: u64,
+    /// When the last scene-camera edit landed, so two gestures an age
+    /// apart undo as two steps; see `scene_gesture_gate`.
+    scene_gesture_last: Option<std::time::Instant>,
 
     // ── the sheets and menus ──
     pub export: crate::panes::export::ExportPane,
@@ -3064,9 +3077,18 @@ impl Studio {
     /// Hands the project's scene to the scene pane, which follows the
     /// document when it embeds the project's scene: edits made anywhere -
     /// here, undo, an agent - land in the pane, and a camera edit made in
-    /// the pane lands in the document. Cheap on every call: the pane
-    /// re-renders only when the scene actually changed.
+    /// the pane lands in the document. Gated on the revision, so the
+    /// playhead's ticks parse the scene JSON only after an actual change;
+    /// while the scene pane's slot holds a taken-out pane (a `Msg::Scene`
+    /// update mid-flight) the sync is queued, not lost.
     pub(crate) fn sync_scene_pane(&mut self) {
+        if self.scene_slot_taken {
+            self.scene_sync_pending = true;
+            return;
+        }
+        if self.scene_synced_revision == self.revision {
+            return;
+        }
         let Some(session) = self.session.as_ref() else {
             return;
         };
@@ -3074,6 +3096,41 @@ impl Studio {
         let project = session.project().clone();
         self.scene
             .sync_from_project(&project, std::path::Path::new(&folder));
+        self.scene_synced_revision = self.revision;
+    }
+
+    /// A sync asked from inside a scene-pane update, where the slot holds
+    /// the placeholder; honoured once `handle` puts the pane back.
+    pub(crate) fn queue_scene_sync(&mut self) {
+        if self.scene_slot_taken {
+            self.scene_sync_pending = true;
+        } else {
+            self.sync_scene_pane();
+        }
+    }
+
+    /// The scene camera's gesture window: two edits more than a beat apart
+    /// are two undo steps, the way an inspector knob's are. Call before
+    /// every `apply_within` that carries a scene-camera command.
+    pub(crate) fn scene_gesture_gate(&mut self) {
+        let now = std::time::Instant::now();
+        let stale = self.scene_gesture_last.is_none_or(|last| {
+            now.duration_since(last) > std::time::Duration::from_millis(900)
+        });
+        if stale
+            && let Some(session) = self.session.as_mut()
+        {
+            session.end_gesture();
+        }
+        self.scene_gesture_last = Some(now);
+    }
+
+    /// The drag's pointer came up: whatever the gesture holds is one step.
+    pub(crate) fn end_scene_gesture(&mut self) {
+        self.scene_gesture_last = None;
+        if let Some(session) = self.session.as_mut() {
+            session.end_gesture();
+        }
     }
 
     /// Plays and scrubs drive the scene pane: the project's scene clips on
@@ -3193,6 +3250,10 @@ impl Studio {
             lengths: HashMap::new(),
             project_name: t("common.untitledProject"),
             project_folder: None,
+            scene_slot_taken: false,
+            scene_sync_pending: false,
+            scene_synced_revision: 0,
+            scene_gesture_last: None,
             dock,
             dock_aside,
             compact: false,
