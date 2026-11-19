@@ -95,7 +95,11 @@ impl VirtualCamera {
         let sy = rx * sin_r + ry * cos_r;
 
         // 3. 逆向变焦
-        let safe_zoom = if self.zoom.abs() < 1e-6 { 1e-6 } else { self.zoom };
+        let safe_zoom = if self.zoom.abs() < 1e-6 {
+            1e-6
+        } else {
+            self.zoom
+        };
         let dx = sx / safe_zoom;
         let dy = sy / safe_zoom;
 
@@ -180,10 +184,7 @@ impl VirtualCamera {
         let m13 = (trans_x * sin_r + trans_y * cos_r) * scale_y;
 
         [
-            m00,  m10, 0.0, 0.0,
-            m01,  m11, 0.0, 0.0,
-            0.0,  0.0, 1.0, 0.0,
-            m03,  m13, 0.0, 1.0,
+            m00, m10, 0.0, 0.0, m01, m11, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, m03, m13, 0.0, 1.0,
         ]
     }
 }
@@ -198,7 +199,14 @@ pub enum CameraMoveType {
     /// 水平/垂直平移运镜（相对当前坐标）
     Pan { delta_x: f64, delta_y: f64 },
     /// 角色特写对焦：平滑将摄像机中心锁定到目标角色锚点
-    FocusTarget { target_x: f64, target_y: f64, target_zoom: f64 },
+    FocusTarget {
+        target_x: f64,
+        target_y: f64,
+        target_zoom: f64,
+    },
+    /// 跟随目标图层：目标位置由场景层解析（`concat-scene::MovePreset.target`）。
+    /// 单独调用 [`CameraMoveType::compute_target_pose`] 时保持原位。
+    Follow,
 }
 
 impl CameraMoveType {
@@ -216,11 +224,16 @@ impl CameraMoveType {
                 target.x += delta_x;
                 target.y += delta_y;
             }
-            Self::FocusTarget { target_x, target_y, target_zoom } => {
+            Self::FocusTarget {
+                target_x,
+                target_y,
+                target_zoom,
+            } => {
                 target.x = *target_x;
                 target.y = *target_y;
                 target.zoom = *target_zoom;
             }
+            Self::Follow => {}
         }
         target
     }

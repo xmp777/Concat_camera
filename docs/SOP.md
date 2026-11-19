@@ -111,6 +111,10 @@ cmd /c "call vcvars64 && cargo build -p concat-mcp"
 # 渲染示例场景（PNG + 相机推近）
 & .\target\debug\concat-studio.exe render examples\camera_demo\scene.json examples\camera_demo\out.mp4
 
+# 裸场景转 Concat 工程文档（顶层 scene），再渲染
+& .\target\debug\concat-studio.exe save examples\camera_demo\scene.json examples\camera_demo\scene_project.json
+& .\target\debug\concat-studio.exe render examples\camera_demo\scene_project.json examples\camera_demo\out.mp4
+
 # 用 concat-cli 验证输出
 & .\target\debug\concat-cli.exe probe examples\camera_demo\out.mp4
 ```
@@ -245,14 +249,14 @@ git push origin main
 |---|---|
 | Phase 0 审计 | ✅（`docs/CAMERA_DESIGN.md`、`HANDOVER.md`、研究文档已整合） |
 | Phase 1 Headless 场景+相机 | ✅ 核心完成（`concat-scene`、`concat-studio`、示例 MP4） |
-| Phase 2 运镜 | 🟡 部分（预设求解已有；组合/跟随/曲线编辑器待补） |
-| Phase 3 MCP | 🟡 部分（`scene_render` 已通；`scene.*`/`camera.*` CRUD 待补） |
+| Phase 2 运镜 | ✅ 核心完成（相对/跟随/组合烘焙；曲线编辑器 UI 待 Phase 4） |
+| Phase 3 MCP | ✅ 核心完成（`scene_create/add_layer/camera_move/get/render` + 工程持久化 + e2e） |
 | Phase 4 Slint UI | ⬜ 未开始（需布局 Spike） |
 | Phase 5 剪辑增强 | ⬜ 未开始 |
 | Phase 6 资产/ASR | ⬜ 未开始 |
 | Phase 7 网络/AI | ⬜ 未开始 |
 
-**下一步建议**：Phase 2 收尾（运镜组合/跟随）→ Phase 3（MCP CRUD + 工程持久化）→ Phase 4（Slint 视口）。
+**下一步建议**：Phase 4（Slint 视口 Spike + 场景面板 + 编辑器预览/导出接相机）→ 图形图层素材化 → 跟随逐帧解算/边界约束 → parallax。
 
 ---
 

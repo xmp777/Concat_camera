@@ -12,6 +12,82 @@ use concat_media::probe;
 use concat_scene::{LayerPlan, Scene, SceneLayer};
 use serde_json::{Value, json};
 
+/// Concat 工程文档中存放 2D 场景的顶层字段。
+pub const SCENE_KEY: &str = "scene";
+
+/// 读取场景文件。
+///
+/// 兼容两种格式：
+/// - 裸 `Scene` JSON（`examples/camera_demo/scene.json`）；
+/// - Concat 工程文档，顶层 `scene` 字段保存场景，其余工程字段原样保留。
+pub fn load_scene(path: &Path) -> Result<Scene, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("无法读取场景 {}：{error}", path.display()))?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("场景 JSON 无效（{}）：{error}", path.display()))?;
+    let scene = value.get(SCENE_KEY).cloned().unwrap_or(value);
+    serde_json::from_value(scene).map_err(|error| format!("场景 JSON 无效：{error}"))
+}
+
+/// 把场景写回场景文件。
+///
+/// 已有 Concat 工程文档会保留其余字段，只替换 `scene`；裸场景或新文件会
+/// 写成一份新的 Concat 工程文档（`concat`/`version`/`timelines` + `scene`）。
+pub fn save_scene(path: &Path, scene: &Scene) -> Result<(), String> {
+    let mut document = match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|error| format!("无法解析工程 {}：{error}", path.display()))?;
+            if value.get("concat").is_some() || value.get("timelines").is_some() {
+                value
+            } else {
+                project_document(scene)?
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => project_document(scene)?,
+        Err(error) => {
+            return Err(format!("无法读取工程 {}：{error}", path.display()));
+        }
+    };
+    let object = document
+        .as_object_mut()
+        .ok_or_else(|| format!("工程 {} 的顶层不是对象", path.display()))?;
+    object.insert(
+        SCENE_KEY.to_owned(),
+        serde_json::to_value(scene).map_err(|error| format!("无法序列化场景：{error}"))?,
+    );
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建目录 {}：{error}", parent.display()))?;
+    }
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| format!("无法序列化工程：{error}"))?;
+    std::fs::write(path, format!("{text}\n"))
+        .map_err(|error| format!("无法写入 {}：{error}", path.display()))
+}
+
+/// 新工程文档：合法 Concat 工程 + 场景扩展字段（调用方插入）。
+fn project_document(scene: &Scene) -> Result<Value, String> {
+    let (width, height) = viewport_of(scene);
+    let settings = concat_project::DocumentSettings {
+        name: scene.name.clone(),
+        width,
+        height,
+        rate_num: scene.rate_num.max(1),
+        rate_den: scene.rate_den.max(1),
+        canvas: [
+            (scene.background[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (scene.background[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (scene.background[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (scene.background[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+        ],
+    };
+    let project = concat_project::Project::with_video(settings.video());
+    Ok(concat_project::to_document(&settings, &project))
+}
+
 pub struct RenderOptions {
     pub output: PathBuf,
     pub crf: u8,
@@ -204,4 +280,60 @@ fn sample_layer(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scenes_roundtrip_bare_and_inside_a_concat_project() {
+        let path =
+            std::env::temp_dir().join(format!("concat-studio-scene-{}.json", std::process::id()));
+        let mut scene = Scene::new("dialogue", "双人对话", 8000.0, 4500.0, 640, 360);
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "hero".into(),
+            name: "主角".into(),
+            kind: concat_scene::LayerKind::Character,
+            asset: Some("hero.png".into()),
+            transform: concat_scene::SceneTransform {
+                x: 3600.0,
+                y: 2250.0,
+                scale: 0.65,
+                ..Default::default()
+            },
+            in_frame: 0.0,
+            duration_frames: 120.0,
+            opacity: 1.0,
+            visible: true,
+            z: 1,
+            expression: Some("smile".into()),
+        });
+
+        // A bare scene file reads as itself.
+        std::fs::write(&path, serde_json::to_string_pretty(&scene).expect("writes"))
+            .expect("bare scene");
+        assert_eq!(load_scene(&path).expect("reads bare"), scene);
+
+        // Saving turns it into a Concat project document with `scene`.
+        save_scene(&path, &scene).expect("saves");
+        let document: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read back"))
+                .expect("valid JSON");
+        assert!(document["concat"].is_string(), "{document}");
+        assert_eq!(document["scene"]["id"], "dialogue");
+        assert_eq!(load_scene(&path).expect("reads project"), scene);
+
+        // Saving again keeps the project fields and updates the scene.
+        scene.name = "第二幕".into();
+        save_scene(&path, &scene).expect("saves again");
+        let document: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read back"))
+                .expect("valid JSON");
+        assert!(document["concat"].is_string());
+        assert_eq!(document["scene"]["name"], "第二幕");
+        assert_eq!(load_scene(&path).expect("reads again"), scene);
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

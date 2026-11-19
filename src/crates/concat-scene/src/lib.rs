@@ -230,24 +230,88 @@ pub struct MovePreset {
     pub duration_frames: f64,
     #[serde(default)]
     pub easing: Easing,
-    /// 可选目标图层（跟随/对焦预留）
+    /// 可选目标图层 id：`Follow` 与 `FocusTarget` 会解析该图层的世界坐标
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// 跟随/对焦时的构图偏移（世界像素）
+    #[serde(default)]
+    pub offset_x: f64,
+    #[serde(default)]
+    pub offset_y: f64,
+    /// 跟随/对焦后的缩放；`None` 表示保持当前缩放
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f64>,
+}
+
+impl Default for MovePreset {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            kind: CameraMoveType::PushIn { factor: 1.0 },
+            duration_frames: 30.0,
+            easing: Easing::default(),
+            target: None,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            zoom: None,
+        }
+    }
 }
 
 impl MovePreset {
-    /// 以当前摄像机为起点求解结束位姿（相对运镜）
+    /// 以当前摄像机为起点求解结束位姿（相对运镜，不解析场景目标）
     pub fn target_pose(&self, current: &VirtualCamera) -> VirtualCamera {
         self.kind.compute_target_pose(current)
     }
 
-    /// 在 0..1 进度上求值（相对运镜）
+    /// 在场景中求解结束位姿：`Follow` / `FocusTarget` 会解析 `target` 图层。
+    ///
+    /// 找不到目标图层时：`Follow` 保持当前机位（仅应用可选缩放）；
+    /// `FocusTarget` 退回 `kind` 内的绝对坐标。
+    pub fn target_pose_in(&self, current: &VirtualCamera, scene: &Scene) -> VirtualCamera {
+        let target_layer = self.target.as_deref().and_then(|id| scene.layer_by_id(id));
+        match (&self.kind, target_layer) {
+            (CameraMoveType::Follow, Some(layer)) => {
+                let mut target = *current;
+                target.x = layer.transform.x + self.offset_x;
+                target.y = layer.transform.y + self.offset_y;
+                target.zoom = self.zoom.unwrap_or(current.zoom);
+                target
+            }
+            (CameraMoveType::Follow, None) => {
+                let mut target = *current;
+                target.zoom = self.zoom.unwrap_or(current.zoom);
+                target
+            }
+            (CameraMoveType::FocusTarget { target_zoom, .. }, Some(layer)) => {
+                let mut target = *current;
+                target.x = layer.transform.x + self.offset_x;
+                target.y = layer.transform.y + self.offset_y;
+                target.zoom = self.zoom.unwrap_or(*target_zoom);
+                target
+            }
+            _ => self.target_pose(current),
+        }
+    }
+
+    /// 在 0..1 进度上求值（相对运镜，不解析场景目标）
     pub fn pose_at(&self, current: &VirtualCamera, progress: f64) -> VirtualCamera {
         let target = self.target_pose(current);
         current.interpolate(&target, progress.clamp(0.0, 1.0), self.easing.to_ease())
     }
 
-    /// 把预设烘焙成两关键帧的摄像机轨道
+    /// 在场景中按 0..1 进度求值（跟随/对焦会解析目标图层）
+    pub fn pose_at_in(
+        &self,
+        current: &VirtualCamera,
+        scene: &Scene,
+        progress: f64,
+    ) -> VirtualCamera {
+        let target = self.target_pose_in(current, scene);
+        current.interpolate(&target, progress.clamp(0.0, 1.0), self.easing.to_ease())
+    }
+
+    /// 把预设烘焙成两关键帧的摄像机轨道（不解析场景目标）
     pub fn bake(&self, current: &VirtualCamera, start_frame: f64) -> Vec<CameraKey> {
         vec![
             CameraKey {
@@ -261,6 +325,99 @@ impl MovePreset {
                 easing: self.easing,
             },
         ]
+    }
+
+    /// 把预设烘焙成两关键帧的摄像机轨道（跟随/对焦会解析目标图层）
+    pub fn bake_in(
+        &self,
+        current: &VirtualCamera,
+        scene: &Scene,
+        start_frame: f64,
+    ) -> Vec<CameraKey> {
+        vec![
+            CameraKey {
+                frame: start_frame,
+                pose: *current,
+                easing: self.easing,
+            },
+            CameraKey {
+                frame: start_frame + self.duration_frames.max(1.0),
+                pose: self.target_pose_in(current, scene),
+                easing: self.easing,
+            },
+        ]
+    }
+}
+
+/// 组合运镜：按顺序执行多个预设，每一步都以上一步的结束机位为起点。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MoveSequence {
+    #[serde(default)]
+    pub steps: Vec<MovePreset>,
+}
+
+impl MoveSequence {
+    /// 总时长（帧），每个步骤至少 1 帧
+    pub fn total_frames(&self) -> f64 {
+        self.steps
+            .iter()
+            .map(|step| step.duration_frames.max(1.0))
+            .sum()
+    }
+
+    /// 在序列偏移 `offset_frames` 处求值；超出结尾时返回最终机位
+    pub fn pose_at_in(
+        &self,
+        current: &VirtualCamera,
+        scene: &Scene,
+        offset_frames: f64,
+    ) -> VirtualCamera {
+        let mut pose = *current;
+        let mut cursor = 0.0;
+        for step in &self.steps {
+            let duration = step.duration_frames.max(1.0);
+            if offset_frames < cursor + duration {
+                let progress = ((offset_frames - cursor) / duration).clamp(0.0, 1.0);
+                return step.pose_at_in(&pose, scene, progress);
+            }
+            pose = step.target_pose_in(&pose, scene);
+            cursor += duration;
+        }
+        pose
+    }
+
+    /// 链式求解最终机位
+    pub fn target_pose_in(&self, current: &VirtualCamera, scene: &Scene) -> VirtualCamera {
+        self.pose_at_in(current, scene, self.total_frames())
+    }
+
+    /// 烘焙为多关键帧轨道：每个步骤边界一个关键帧，缓动取该步骤的曲线
+    pub fn bake_in(
+        &self,
+        current: &VirtualCamera,
+        scene: &Scene,
+        start_frame: f64,
+    ) -> Vec<CameraKey> {
+        let mut keys = Vec::new();
+        let mut pose = *current;
+        let mut frame = start_frame;
+        for (index, step) in self.steps.iter().enumerate() {
+            if index == 0 {
+                keys.push(CameraKey {
+                    frame,
+                    pose,
+                    easing: step.easing,
+                });
+            }
+            frame += step.duration_frames.max(1.0);
+            pose = step.target_pose_in(&pose, scene);
+            keys.push(CameraKey {
+                frame,
+                pose,
+                easing: step.easing,
+            });
+        }
+        keys
     }
 }
 
@@ -359,6 +516,24 @@ impl Scene {
         self.layers.iter().find(|l| l.id == id)
     }
 
+    /// 在 `start_frame` 处把相对运镜烘焙进摄像机轨道。
+    ///
+    /// 起点取轨道在该帧的当前机位；因此同一预设应用到不同机位会得到各自的结果。
+    pub fn add_move(&mut self, preset: &MovePreset, start_frame: f64) {
+        let current = self.camera.pose_at(start_frame);
+        for key in preset.bake_in(&current, self, start_frame) {
+            self.camera.add_key(key.frame, key.pose, key.easing);
+        }
+    }
+
+    /// 在 `start_frame` 处把组合运镜烘焙进摄像机轨道（步骤间链式相对）。
+    pub fn add_sequence(&mut self, sequence: &MoveSequence, start_frame: f64) {
+        let current = self.camera.pose_at(start_frame);
+        for key in sequence.bake_in(&current, self, start_frame) {
+            self.camera.add_key(key.frame, key.pose, key.easing);
+        }
+    }
+
     /// 当前帧的可见图层计划：世界像素 → 摄像机画框（归一化 Transform）
     pub fn plan_layers(&self, frame: f64, frame_width: u32, frame_height: u32) -> Vec<LayerPlan> {
         let pose = self.camera.pose_at(frame);
@@ -454,7 +629,7 @@ mod tests {
             kind: CameraMoveType::PushIn { factor: 1.2 },
             duration_frames: 90.0,
             easing: Easing::LINEAR,
-            target: None,
+            ..Default::default()
         };
 
         let target = preset.target_pose(&current);
@@ -541,5 +716,190 @@ mod tests {
                 .iter()
                 .all(|p| p.layer_id != "a")
         );
+    }
+
+    fn layer(id: &str, x: f64, y: f64, z: i32) -> SceneLayer {
+        SceneLayer {
+            id: id.into(),
+            name: id.into(),
+            kind: LayerKind::Character,
+            asset: Some(format!("assets/{id}.png")),
+            transform: SceneTransform {
+                x,
+                y,
+                ..Default::default()
+            },
+            in_frame: 0.0,
+            duration_frames: 300.0,
+            opacity: 1.0,
+            visible: true,
+            z,
+            expression: None,
+        }
+    }
+
+    #[test]
+    fn follow_preset_centers_on_target_layer() {
+        let mut scene = Scene::new("s", "场景", 8000.0, 4500.0, 1920, 1080);
+        scene.layers.push(layer("hero", 3000.0, 2000.0, 1));
+
+        let preset = MovePreset {
+            name: "跟随主角".into(),
+            kind: CameraMoveType::Follow,
+            duration_frames: 60.0,
+            easing: Easing::LINEAR,
+            target: Some("hero".into()),
+            offset_x: 120.0,
+            offset_y: -80.0,
+            zoom: Some(1.4),
+        };
+
+        let start = cam(4000.0, 2250.0, 1.0);
+        let target = preset.target_pose_in(&start, &scene);
+        assert!((target.x - 3120.0).abs() < 1e-9);
+        assert!((target.y - 1920.0).abs() < 1e-9);
+        assert!((target.zoom - 1.4).abs() < 1e-9);
+
+        let mid = preset.pose_at_in(&start, &scene, 0.5);
+        assert!((mid.x - 3560.0).abs() < 1e-6);
+        assert!((mid.zoom - 1.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn follow_without_target_keeps_current_pose() {
+        let scene = Scene::new("s", "场景", 8000.0, 4500.0, 1920, 1080);
+        let start = cam(1234.0, 567.0, 1.25);
+        let preset = MovePreset {
+            name: "跟随".into(),
+            kind: CameraMoveType::Follow,
+            target: None,
+            ..Default::default()
+        };
+        let target = preset.target_pose_in(&start, &scene);
+        assert_eq!(target, start);
+    }
+
+    #[test]
+    fn move_sequence_chains_steps_relative_to_each_other() {
+        let scene = Scene::new("s", "场景", 8000.0, 4500.0, 1920, 1080);
+        let start = cam(4000.0, 2250.0, 1.0);
+        let sequence = MoveSequence {
+            steps: vec![
+                MovePreset {
+                    name: "右移".into(),
+                    kind: CameraMoveType::Pan {
+                        delta_x: 100.0,
+                        delta_y: -40.0,
+                    },
+                    duration_frames: 30.0,
+                    easing: Easing::LINEAR,
+                    ..Default::default()
+                },
+                MovePreset {
+                    name: "推近".into(),
+                    kind: CameraMoveType::PushIn { factor: 2.0 },
+                    duration_frames: 30.0,
+                    easing: Easing::LINEAR,
+                    ..Default::default()
+                },
+            ],
+        };
+
+        assert!((sequence.total_frames() - 60.0).abs() < 1e-9);
+        let mid_first = sequence.pose_at_in(&start, &scene, 15.0);
+        assert!((mid_first.x - 4050.0).abs() < 1e-6);
+        assert!((mid_first.zoom - 1.0).abs() < 1e-6);
+
+        let end_first = sequence.pose_at_in(&start, &scene, 30.0);
+        assert!((end_first.x - 4100.0).abs() < 1e-6);
+        assert!((end_first.y - 2210.0).abs() < 1e-6);
+
+        let mid_second = sequence.pose_at_in(&start, &scene, 45.0);
+        assert!((mid_second.x - 4100.0).abs() < 1e-6);
+        assert!((mid_second.zoom - 1.5).abs() < 1e-6);
+
+        let end = sequence.target_pose_in(&start, &scene);
+        assert!((end.x - 4100.0).abs() < 1e-6);
+        assert!((end.zoom - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn same_relative_preset_works_from_any_start_pose() {
+        let scene = Scene::new("s", "场景", 8000.0, 4500.0, 1920, 1080);
+        let preset = MovePreset {
+            name: "缓慢推近".into(),
+            kind: CameraMoveType::PushIn { factor: 1.25 },
+            duration_frames: 90.0,
+            easing: Easing::EASE_IN_OUT,
+            ..Default::default()
+        };
+
+        let a = cam(1000.0, 800.0, 1.0);
+        let b = cam(6000.0, 3000.0, 1.6);
+        let target_a = preset.target_pose_in(&a, &scene);
+        let target_b = preset.target_pose_in(&b, &scene);
+
+        assert!((target_a.zoom - 1.25).abs() < 1e-9);
+        assert!((target_b.zoom - 2.0).abs() < 1e-9);
+        assert!((target_a.x - a.x).abs() < 1e-9);
+        assert!((target_b.y - b.y).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scene_bakes_sequence_into_camera_track() {
+        let mut scene = Scene::new("s", "场景", 8000.0, 4500.0, 1920, 1080);
+        scene.layers.push(layer("hero", 3000.0, 2000.0, 1));
+        scene
+            .camera
+            .add_key(30.0, cam(5000.0, 2600.0, 1.5), Easing::LINEAR);
+
+        let sequence = MoveSequence {
+            steps: vec![
+                MovePreset {
+                    name: "跟随".into(),
+                    kind: CameraMoveType::Follow,
+                    duration_frames: 30.0,
+                    easing: Easing::LINEAR,
+                    target: Some("hero".into()),
+                    zoom: Some(1.2),
+                    ..Default::default()
+                },
+                MovePreset {
+                    name: "推近".into(),
+                    kind: CameraMoveType::PushIn { factor: 2.0 },
+                    duration_frames: 30.0,
+                    easing: Easing::LINEAR,
+                    ..Default::default()
+                },
+            ],
+        };
+        scene.add_sequence(&sequence, 30.0);
+
+        let follow_end = scene.camera.pose_at(60.0);
+        assert!((follow_end.x - 3000.0).abs() < 1e-6);
+        assert!((follow_end.y - 2000.0).abs() < 1e-6);
+        assert!((follow_end.zoom - 1.2).abs() < 1e-6);
+
+        let end = scene.camera.pose_at(90.0);
+        assert!((end.zoom - 2.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn move_sequence_roundtrips_through_json() {
+        let sequence = MoveSequence {
+            steps: vec![MovePreset {
+                name: "跟随".into(),
+                kind: CameraMoveType::Follow,
+                duration_frames: 45.0,
+                easing: Easing::EASE_OUT,
+                target: Some("hero".into()),
+                offset_x: 10.0,
+                offset_y: 20.0,
+                zoom: Some(1.3),
+            }],
+        };
+        let json = serde_json::to_string(&sequence).expect("serialises");
+        let parsed: MoveSequence = serde_json::from_str(&json).expect("deserialises");
+        assert_eq!(parsed, sequence);
     }
 }

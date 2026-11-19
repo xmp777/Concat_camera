@@ -1336,6 +1336,7 @@ name = "concat-mcp"
 version = "0.2.12"
 dependencies = [
  "concat-api",
+ "concat-camera",
  "concat-media",
  "concat-scene",
  "concat-server",
@@ -1460,6 +1461,7 @@ version = "0.2.12"
 dependencies = [
  "concat-export",
  "concat-media",
+ "concat-project",
  "concat-scene",
  "serde_json",
 ]

@@ -3,7 +3,7 @@
 > 最后更新：2026-11-19
 > 仓库：`G:\Projects\Concat_camera`（fork of `jub0t/Concat`，AGPL-3.0-or-later）
 > 远程：`origin` = `xmp777/Concat_camera`，`upstream` = `jub0t/Concat`
-> 当前：**P0 收尾完成并已推送；P1 能力闭环（concat-scene + 相对运镜 + MCP scene_render + MP4）已跑通；MSVC 为正式基线**
+> 当前：**P0/P1 完成；Phase 2（跟随 + 组合运镜）与 Phase 3（工程持久化 + MCP 场景 CRUD）已闭环；MSVC 为正式基线**
 > **接手请先读 `docs/SOP.md`（标准作业程序）与 `docs/CAMERA_DESIGN.md`。**
 
 ---
@@ -56,6 +56,25 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 - **MSVC 正式基线**：VS Build Tools 已安装；`rustup override` 指向 `1.93.1-x86_64-pc-windows-msvc`；
   `concat-scene`/`concat-camera`/`concat-mcp` 的测试与构建在 MSVC 下通过。
 
+### Phase 2/3（本次，2026-11-19）
+- **跟随与组合运镜**：
+  - `CameraMoveType::Follow`；`MovePreset` 新增 `offset_x/offset_y/zoom`，`target` 图层由 `target_pose_in(scene)` 解析。
+  - `FocusTarget` 也支持 `target` 图层（坐标以图层为准）。
+  - `MoveSequence { steps }`：每步以上一步结束机位为起点；`pose_at_in` 求中间帧、`bake_in` 生成多关键帧。
+  - `Scene::add_move` / `Scene::add_sequence`：从触发帧的当前机位烘焙进轨道。
+  - `concat-scene` 共 11 tests（含“同一相对预设从不同机位出发”验收）。
+- **工程持久化**：
+  - `concat_studio::save_scene` 写 **Concat 工程文档**（`concat`/`version`/`timelines` + 顶层 `scene`）；
+  - `load_scene` 同时接受裸 Scene JSON 与工程文档；`concat-studio save <scene.json> <project.json>`。
+- **MCP 场景 CRUD**：
+  - `scene_create`（工程文档 + 场景、输出尺寸/帧率/背景）；
+  - `scene_add_layer`（upsert；未给字段保留原值）；
+  - `scene_camera_move`（`moves[]`：push_in/pull_out/pan/follow/focus_target，链式烘焙）；
+  - `scene_get`（图层/相机摘要）；
+  - `scene_render` 改为兼容工程文档。
+  - 新 e2e：`an_agent_builds_and_renders_a_two_character_scene_headless`（从零建双人场景 → 跟随运镜 → 640×360 MP4）。
+- **MSVC 下验证**：`concat-scene` 11、`concat-camera` 6、`concat-studio` 1、`concat-mcp` 10 lib + 5 e2e。
+
 ---
 
 ## 2. 验证记录（本机，2026-11-19）
@@ -63,10 +82,12 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 | 项 | 结果 |
 |---|---|
 | `cargo test -p concat-camera` | 6 passed |
-| `cargo test -p concat-scene` | 5 passed |
+| `cargo test -p concat-scene` | 11 passed |
+| `cargo test -p concat-studio` | 1 passed（裸场景/工程文档往返） |
 | `cargo test -p concat-render` | 130 passed, 1 ignored |
-| `cargo test -p concat-mcp`（MSVC） | 4 e2e passed（含 scene_render） |
+| `cargo test -p concat-mcp`（MSVC） | 10 lib + 5 e2e passed（含从零建场景并渲染） |
 | `concat-cli probe examples/camera_demo/out.mp4` | 3.000s / h264 / 1920×1080 / 30fps |
+| `concat-studio save` + render 工程文档 | 3.000s / h264 / 1920×1080 / 30fps |
 | 示例截图 | `docs/assets/camera_demo_frame0.png`、`frame89.png` |
 
 ### 关键坑（已修复/记录）
@@ -76,6 +97,8 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 4. **Windows 自带 `C:\WINDOWS\SYSTEM32\onnxruntime.dll`** 会被优先加载；调试/运行 MCP 时需把我们的 `onnxruntime.dll` 放在 exe 同目录（已复制到 `target/debug` 与 `deps`）。
 5. 本机 ONNX `onnxruntime.lib` 仅 2KB（MinGW 用）；MSVC 构建目前能过（未链接 ORT 符号），若未来链接失败，从 `onnxruntime-1.28.0.nupkg` 恢复官方 MSVC `.lib`。
 6. MCP 的 `scene_render` 是同步调用（渲染期间阻塞该工具调用）；大场景应后续改为任务/进度通知。
+7. **场景工程格式**：`save_scene` 写 Concat 工程文档（顶层 `scene`）；`load_scene` 同时接受裸 Scene。读场景一律走 `load_scene`，不要直接 `serde_json::from_str::<Scene>`。
+8. **MCP 工具清单预算**：`schema::tests::the_tool_list_fits_an_agents_context` 上限 190KB；新增工具有意精简描述，避免把上下文撑爆。
 
 ---
 
@@ -84,18 +107,18 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 ```
 src/crates/
 ├─ concat-camera/    # 投影/插值/运镜预设（P0）
-├─ concat-scene/     # 2D 场景/图层/相机轨道（P1）
-├─ concat-studio/    # Scene -> ExportClip -> render_on（P1）
-├─ concat-mcp/       # MCP：新增 scene_render 工具
+├─ concat-scene/     # 2D 场景/图层/相机轨道/跟随/组合运镜（P1+）
+├─ concat-studio/    # Scene -> ExportClip -> render_on；裸场景/工程文档读写
+├─ concat-mcp/       # MCP：scene_create/add_layer/camera_move/get/render
 ├─ concat-render/    # FramePlan.camera 钩子
 ├─ concat-export/    # 合成/编码（复用）
 └─ concat/           # Slint 编辑器（P2 视口接入）
 examples/camera_demo/ # 场景 JSON + 测试素材 + 说明
-docs/CAMERA_DESIGN.md # 设计/坐标/限制/P1 方案
+docs/CAMERA_DESIGN.md # 设计/坐标/限制/方案
 ```
 
-数据流（P1）：
-`scene.json → concat_scene::Scene → plan_layers(camera at frame) → ExportClip(animation keys) → concat_export::render_on → MP4`
+数据流（P1+）：
+`scene.json / project.json(scene) → concat_scene::Scene → plan_layers(camera at frame) → ExportClip(animation keys) → concat_export::render_on → MP4`
 
 ---
 
@@ -103,16 +126,17 @@ docs/CAMERA_DESIGN.md # 设计/坐标/限制/P1 方案
 
 **限制**
 - 图形图层（shape）尚未进入导出（需要素材化或 Concat 的 title/图层路径）。
-- 场景仅存在于独立 `scene.json`，尚未并入 Concat 工程文档；编辑器内的 `plan_frame` 仍未传入相机。
-- 相机预设没有持续时间/组合/跟随求解的完整 UI；`FocusTarget` 为绝对点。
-- Slint 视口（实时预览/编辑）尚未开始（P2）。
-- MCP `scene_render` 同步、无进度/取消。
+- 场景已能写入 Concat 工程文档（顶层 `scene`），但编辑器内还没有场景面板；编辑器内的 `plan_frame` 仍未传入相机，场景片段也未接入时间轴。
+- 跟随只解析图层**静态**世界坐标；图层自身关键帧动画完成后，跟随需要逐帧重解目标点。
+- 相机预设没有可视化曲线编辑/管理 UI；`FocusTarget` 无目标时为绝对点。
+- Slint 视口（实时预览/编辑）尚未开始（Phase 4）。
+- MCP 场景工具同步执行、无进度/取消；大场景渲染会阻塞该次调用。
 
 **下一步（建议）**
-1. **P2 Slint 视口 Spike**：在编辑器中央区显示 `concat-studio` 同款场景帧（先 CPU 图像，后 wgpu 纹理），支持相机拖拽。
-2. 把 `Scene` 持久化进 Concat 工程（`project.json` 扩展字段），并让编辑器的 `plan_frame` 调用 `plan_frame_with_camera`（审计 8 个调用点）。
+1. **Phase 4 Slint 视口 Spike**：编辑器中央区显示场景帧（先 CPU 图像，后 wgpu 纹理），支持相机拖拽/推拉预览。
+2. 编辑器接入：场景面板 + 把 `plan_frame` 调用点（审计 8 处）统一到 `plan_frame_with_camera`，预览/导出共用相机求值。
 3. 图形图层：用 Concat 的 title/Shape 或生成 PNG 后进入同一管线。
-4. 相机预设管理 UI（相对/组合/跟随）+ MCP 工具。
+4. 跟随增强：图层关键帧动画完成后逐帧解算目标点；加世界边界/zoom 约束。
 5. 清理 stash 中的 parallax（正确公式 `(world-camera)*p` + 测试）。
 
 ---
@@ -120,6 +144,7 @@ docs/CAMERA_DESIGN.md # 设计/坐标/限制/P1 方案
 ## 5. Git
 
 ```
+Phase 2/3 feat(scene): follow + move sequences, Concat project persistence, MCP scene CRUD + e2e
 322b4a1a feat(scene): concat-scene model, headless camera renderer (concat-studio), MCP scene_render tool + demo
 977a6946 docs(camera): record verified P0 state...
 12c6f35f feat(render): integrate virtual camera projection into concat-render and export pipeline

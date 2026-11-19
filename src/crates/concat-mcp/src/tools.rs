@@ -77,6 +77,14 @@ pub enum Action {
     ExportWait,
     /// Renders a 2D scene (concat-scene JSON) through Concat's export pipeline.
     SceneRender,
+    /// Creates a 2D scene file (Concat project document with a `scene`).
+    SceneCreate,
+    /// Adds or updates one layer in a 2D scene.
+    SceneAddLayer,
+    /// Applies relative camera moves / sequences to a 2D scene.
+    SceneCameraMove,
+    /// Reads a 2D scene summary.
+    SceneGet,
     /// `updateClip` with only a mask.
     Mask,
     /// `preview.frame`, as an image.
@@ -487,11 +495,47 @@ pub fn catalogue() -> Vec<Tool> {
         Tool {
             name: "scene_render",
             title: "Render a 2D scene",
-            description: "Renders a 2D scene (concat-scene JSON: world-space layers plus a camera track) to `output` (an .mp4 path) through Concat's own compositor and encoder. `scenePath` names the scene file; relative asset paths in it resolve beside it. Optional `crf` (0-51, 20) and `preset` (x264 speed, \"medium\"). Synchronous: it returns when the file is written. No project needs to be open.",
+            description: "Renders a 2D scene (concat-scene JSON: world-space layers plus a camera track, either bare or a Concat project document with a top-level `scene`) to `output` (an .mp4 path) through Concat's own compositor and encoder. `scenePath` names the scene file; relative asset paths in it resolve beside it. Optional `crf` (0-51, 20) and `preset` (x264 speed, \"medium\"). Synchronous: it returns when the file is written. No project needs to be open.",
             read_only: false,
             destructive: false,
             idempotent: false,
             action: Action::SceneRender,
+        },
+        Tool {
+            name: "scene_create",
+            title: "Create a 2D scene",
+            description: "Creates a 2D scene file at `scenePath` as a Concat project document. `name` names it; `worldWidth`/`worldHeight` are the world canvas (8000x4500), `width`/`height` the output frame (1920x1080), `fps` 30, `background` RGBA 0-1. The camera starts centred. An existing file is kept unless `overwrite` is true.",
+            read_only: false,
+            destructive: true,
+            idempotent: false,
+            action: Action::SceneCreate,
+        },
+        Tool {
+            name: "scene_add_layer",
+            title: "Add a scene layer",
+            description: "Adds or updates one layer: `scenePath`, stable `id`, `kind` (background, character, prop, shape, image), image `asset`, world `x`/`y`, `scale`, `rotationDeg`, `z`, `inFrame`/`durationFrames`, `opacity`, `visible`, `expression`. Omitted fields keep an existing layer's values; a new layer starts at the world centre, scale 1, z = layer count.",
+            read_only: false,
+            destructive: false,
+            idempotent: true,
+            action: Action::SceneAddLayer,
+        },
+        Tool {
+            name: "scene_camera_move",
+            title: "Move a scene camera",
+            description: "Bakes relative camera moves into a scene at `atFrame` (0). `moves` is an ordered array of steps: push_in/pull_out (`factor`), pan (`deltaX`, `deltaY` world pixels), follow (`target` layer id, optional `offsetX`/`offsetY`/`zoom`), focus_target (`target`, or `targetX`/`targetY`/`targetZoom`). Each step has `durationFrames` (30) and `easing` (linear, ease_in, ease_out, ease_in_out or [x1,y1,x2,y2]); each starts where the last ended.",
+            read_only: false,
+            destructive: false,
+            idempotent: false,
+            action: Action::SceneCameraMove,
+        },
+        Tool {
+            name: "scene_get",
+            title: "Read a 2D scene",
+            description: "Reads a scene: world size, output frame, fps, duration, layers and camera keyframes.",
+            read_only: true,
+            destructive: false,
+            idempotent: true,
+            action: Action::SceneGet,
         },
         Tool {
             name: "preview_frame",
@@ -675,6 +719,112 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
             },
             "required": ["scenePath", "output"],
         })),
+        Action::SceneCreate => Some(json!({
+            "type": "object",
+            "properties": {
+                "scenePath": { "type": "string", "description": "Scene file." },
+                "name": { "type": "string", "minLength": 1, "description": "Scene name." },
+                "worldWidth": { "type": "number", "minimum": 1, "default": 8000, "description": "World width, px." },
+                "worldHeight": { "type": "number", "minimum": 1, "default": 4500, "description": "World height, px." },
+                "width": { "type": "integer", "minimum": 1, "default": 1920, "description": "Frame width." },
+                "height": { "type": "integer", "minimum": 1, "default": 1080, "description": "Frame height." },
+                "fps": { "type": "number", "minimum": 1, "default": 30, "description": "Frames per second." },
+                "background": {
+                    "type": "array",
+                    "items": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "description": "RGBA, each 0-1.",
+                },
+                "overwrite": { "type": "boolean", "default": false, "description": "Replace an existing file." },
+            },
+            "required": ["scenePath", "name"],
+        })),
+        Action::SceneAddLayer => Some(json!({
+            "type": "object",
+            "properties": {
+                "scenePath": { "type": "string", "description": "Scene file." },
+                "id": { "type": "string", "minLength": 1, "description": "Layer id." },
+                "name": { "type": "string", "description": "Display name; defaults to id." },
+                "kind": {
+                    "type": "string",
+                    "enum": ["background", "character", "prop", "shape", "image"],
+                    "default": "image",
+                    "description": "Layer kind.",
+                },
+                "asset": { "type": "string", "description": "Image path, absolute or beside the scene." },
+                "x": { "type": "number", "description": "World x, px (centre)." },
+                "y": { "type": "number", "description": "World y, px (centre)." },
+                "scale": { "type": "number", "default": 1, "description": "Scale (1)." },
+                "rotationDeg": { "type": "number", "default": 0, "description": "Clockwise degrees (0)." },
+                "stretchX": { "type": "number", "default": 1 },
+                "stretchY": { "type": "number", "default": 1 },
+                "z": { "type": "integer", "description": "Stacking; higher is in front (layer count)." },
+                "inFrame": { "type": "number", "minimum": 0, "default": 0, "description": "First frame (0)." },
+                "durationFrames": { "type": "number", "minimum": 0, "default": 0, "description": "Frames shown; 0 = to end." },
+                "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Alpha (1)." },
+                "visible": { "type": "boolean", "default": true, "description": "Draw it (true)." },
+                "expression": { "type": "string", "description": "Character variant key." },
+            },
+            "required": ["scenePath", "id"],
+        })),
+        Action::SceneCameraMove => Some(json!({
+            "type": "object",
+            "properties": {
+                "scenePath": { "type": "string", "description": "Scene file." },
+                "atFrame": { "type": "number", "minimum": 0, "default": 0, "description": "Start frame (0)." },
+                "moves": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Ordered steps; each starts where the last ended.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["push_in", "pull_out", "pan", "follow", "focus_target"],
+                                "description": "Move kind.",
+                            },
+                            "factor": { "type": "number", "exclusiveMinimum": 0, "default": 1.2, "description": "Zoom factor (1.2)." },
+                            "deltaX": { "type": "number", "default": 0, "description": "World shift, px (0)." },
+                            "deltaY": { "type": "number", "default": 0, "description": "World shift, px (0)." },
+                            "target": { "type": "string", "description": "Layer id to follow or focus." },
+                            "targetX": { "type": "number", "default": 0, "description": "World point for focus_target." },
+                            "targetY": { "type": "number", "default": 0, "description": "World point for focus_target." },
+                            "targetZoom": { "type": "number", "default": 1, "description": "Zoom for focus_target (1)." },
+                            "offsetX": { "type": "number", "default": 0, "description": "Framing offset, px (0)." },
+                            "offsetY": { "type": "number", "default": 0, "description": "Framing offset, px (0)." },
+                            "zoom": { "type": "number", "exclusiveMinimum": 0, "description": "Final zoom; absent keeps current." },
+                            "durationFrames": { "type": "number", "minimum": 1, "default": 30, "description": "Frames (30)." },
+                            "easing": {
+                                "description": "Name or [x1,y1,x2,y2].",
+                                "oneOf": [
+                                    {
+                                        "type": "string",
+                                        "enum": ["linear", "ease_in", "ease_out", "ease_in_out"],
+                                    },
+                                    {
+                                        "type": "array",
+                                        "items": { "type": "number", "minimum": 0, "maximum": 1 },
+                                        "minItems": 4,
+                                        "maxItems": 4,
+                                    },
+                                ],
+                            },
+                        },
+                        "required": ["type"],
+                    },
+                },
+            },
+            "required": ["scenePath", "moves"],
+        })),
+        Action::SceneGet => Some(json!({
+            "type": "object",
+            "properties": {
+                "scenePath": { "type": "string", "description": "Scene file." },
+            },
+            "required": ["scenePath"],
+        })),
         Action::Mask => {
             let update = schemas.command("updateClip")?;
             let mut masks = update
@@ -786,6 +936,10 @@ fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, A
         Action::ExportWait => export_wait(arguments, backend, context.cancelled, context.progress),
         Action::PreviewFrame => preview(arguments, backend),
         Action::SceneRender => scene_render(arguments),
+        Action::SceneCreate => scene_create(arguments),
+        Action::SceneAddLayer => scene_add_layer(arguments),
+        Action::SceneCameraMove => scene_camera_move(arguments),
+        Action::SceneGet => scene_get(arguments),
         Action::Mask => {
             let result = backend.call(mask(arguments)?)?;
             Ok(Outcome::json(summary::view(&result)))
@@ -820,10 +974,8 @@ fn scene_render(mut arguments: Value) -> Result<Outcome, ApiError> {
         return Err(invalid(&format!("unknown field `{unknown}`")));
     }
 
-    let text = std::fs::read_to_string(&scene_path)
-        .map_err(|error| invalid(&format!("cannot read {scene_path}: {error}")))?;
-    let scene: concat_scene::Scene = serde_json::from_str(&text)
-        .map_err(|error| invalid(&format!("invalid scene JSON: {error}")))?;
+    let scene = concat_studio::load_scene(std::path::Path::new(&scene_path))
+        .map_err(|error| invalid(&error))?;
     let scene_dir = std::path::Path::new(&scene_path)
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
@@ -836,6 +988,411 @@ fn scene_render(mut arguments: Value) -> Result<Outcome, ApiError> {
     concat_studio::render_scene(&scene, scene_dir, &options, &mut progress)
         .map_err(ApiError::invalid)?;
     Ok(Outcome::json(json!({ "output": output })))
+}
+
+/// `scene_create`: a new Concat project document holding a 2D scene.
+fn scene_create(mut arguments: Value) -> Result<Outcome, ApiError> {
+    let fields = arguments
+        .as_object_mut()
+        .ok_or_else(|| scene_error("the arguments are an object"))?;
+    let path = take_string(fields, "scenePath")?
+        .ok_or_else(|| scene_error("missing field `scenePath`"))?;
+    let name = take_string(fields, "name")?.ok_or_else(|| scene_error("missing field `name`"))?;
+    let world_width = take_number(fields, "worldWidth")?
+        .unwrap_or(8000.0)
+        .max(1.0);
+    let world_height = take_number(fields, "worldHeight")?
+        .unwrap_or(4500.0)
+        .max(1.0);
+    let width = take_number(fields, "width")?.unwrap_or(1920.0).max(1.0) as u32;
+    let height = take_number(fields, "height")?.unwrap_or(1080.0).max(1.0) as u32;
+    let fps = take_number(fields, "fps")?.unwrap_or(30.0).max(1.0);
+    let background = match fields.remove("background") {
+        None | Some(Value::Null) => [0.06, 0.08, 0.09, 1.0],
+        Some(Value::Array(items)) if items.len() == 4 => {
+            let mut rgba = [0.0f32; 4];
+            for (index, item) in items.iter().enumerate() {
+                let value = item
+                    .as_f64()
+                    .ok_or_else(|| scene_error("`background` holds four numbers"))?;
+                rgba[index] = value.clamp(0.0, 1.0) as f32;
+            }
+            rgba
+        }
+        Some(_) => return Err(scene_error("`background` holds four numbers 0-1")),
+    };
+    let overwrite = take_bool(fields, "overwrite")?.unwrap_or(false);
+    if let Some(unknown) = fields.keys().next() {
+        return Err(scene_error(format!("unknown field `{unknown}`")));
+    }
+
+    let path = std::path::PathBuf::from(path);
+    if path.exists() && !overwrite {
+        return Err(scene_error(format!(
+            "{} already exists (pass `overwrite: true` to replace it)",
+            path.display()
+        )));
+    }
+
+    let mut scene =
+        concat_scene::Scene::new(&name, &name, world_width, world_height, width, height);
+    let (rate_num, rate_den) = rate_of(fps);
+    scene.rate_num = rate_num;
+    scene.rate_den = rate_den;
+    scene.background = background;
+    concat_studio::save_scene(&path, &scene).map_err(scene_error)?;
+    Ok(Outcome::json(json!({
+        "scenePath": path.to_string_lossy(),
+        "scene": scene_summary(&scene),
+    })))
+}
+
+/// `scene_add_layer`: add or update one layer, keeping fields not given.
+fn scene_add_layer(mut arguments: Value) -> Result<Outcome, ApiError> {
+    let fields = arguments
+        .as_object_mut()
+        .ok_or_else(|| scene_error("the arguments are an object"))?;
+    let path = take_string(fields, "scenePath")?
+        .ok_or_else(|| scene_error("missing field `scenePath`"))?;
+    let id = take_string(fields, "id")?.ok_or_else(|| scene_error("missing field `id`"))?;
+    let path = std::path::PathBuf::from(path);
+    let mut scene = concat_studio::load_scene(&path).map_err(scene_error)?;
+    let existing = scene
+        .layers
+        .iter()
+        .position(|layer| layer.id == id)
+        .map(|index| scene.layers[index].clone());
+
+    let kind = match take_string(fields, "kind")? {
+        Some(text) => parse_layer_kind(&text)?,
+        None => existing
+            .as_ref()
+            .map(|layer| layer.kind)
+            .unwrap_or(concat_scene::LayerKind::Image),
+    };
+    let name = take_string(fields, "name")?
+        .or_else(|| existing.as_ref().map(|layer| layer.name.clone()))
+        .unwrap_or_else(|| id.clone());
+    let asset = match take_string(fields, "asset")? {
+        Some(asset) => Some(asset),
+        None => existing.as_ref().and_then(|layer| layer.asset.clone()),
+    };
+    let x = take_number(fields, "x")?
+        .or_else(|| existing.as_ref().map(|layer| layer.transform.x))
+        .unwrap_or(scene.world_width / 2.0);
+    let y = take_number(fields, "y")?
+        .or_else(|| existing.as_ref().map(|layer| layer.transform.y))
+        .unwrap_or(scene.world_height / 2.0);
+    let scale = take_number(fields, "scale")?
+        .or_else(|| existing.as_ref().map(|layer| layer.transform.scale))
+        .unwrap_or(1.0);
+    let rotation_deg = take_number(fields, "rotationDeg")?
+        .or_else(|| existing.as_ref().map(|layer| layer.transform.rotation_deg))
+        .unwrap_or(0.0);
+    let stretch_x = take_number(fields, "stretchX")?
+        .or_else(|| existing.as_ref().map(|layer| layer.transform.stretch_x))
+        .unwrap_or(1.0);
+    let stretch_y = take_number(fields, "stretchY")?
+        .or_else(|| existing.as_ref().map(|layer| layer.transform.stretch_y))
+        .unwrap_or(1.0);
+    let z = take_number(fields, "z")?
+        .map(|value| value.round() as i32)
+        .or_else(|| existing.as_ref().map(|layer| layer.z))
+        .unwrap_or(scene.layers.len() as i32);
+    let in_frame = take_number(fields, "inFrame")?
+        .or_else(|| existing.as_ref().map(|layer| layer.in_frame))
+        .unwrap_or(0.0)
+        .max(0.0);
+    let duration_frames = take_number(fields, "durationFrames")?
+        .or_else(|| existing.as_ref().map(|layer| layer.duration_frames))
+        .unwrap_or(0.0)
+        .max(0.0);
+    let opacity = take_number(fields, "opacity")?
+        .or_else(|| existing.as_ref().map(|layer| layer.opacity))
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    let visible = take_bool(fields, "visible")?
+        .or_else(|| existing.as_ref().map(|layer| layer.visible))
+        .unwrap_or(true);
+    let expression = take_string(fields, "expression")?
+        .or_else(|| existing.as_ref().and_then(|layer| layer.expression.clone()));
+    if let Some(unknown) = fields.keys().next() {
+        return Err(scene_error(format!("unknown field `{unknown}`")));
+    }
+
+    let layer = concat_scene::SceneLayer {
+        id: id.clone(),
+        name,
+        kind,
+        asset,
+        transform: concat_scene::SceneTransform {
+            x,
+            y,
+            scale,
+            rotation_deg,
+            stretch_x,
+            stretch_y,
+        },
+        in_frame,
+        duration_frames,
+        opacity,
+        visible,
+        z,
+        expression,
+    };
+    if let Some(index) = scene.layers.iter().position(|layer| layer.id == id) {
+        scene.layers[index] = layer;
+    } else {
+        scene.layers.push(layer);
+    }
+    concat_studio::save_scene(&path, &scene).map_err(scene_error)?;
+    Ok(Outcome::json(json!({
+        "scenePath": path.to_string_lossy(),
+        "scene": scene_summary(&scene),
+    })))
+}
+
+/// `scene_camera_move`: bake one relative move sequence into the camera track.
+fn scene_camera_move(mut arguments: Value) -> Result<Outcome, ApiError> {
+    let fields = arguments
+        .as_object_mut()
+        .ok_or_else(|| scene_error("the arguments are an object"))?;
+    let path = take_string(fields, "scenePath")?
+        .ok_or_else(|| scene_error("missing field `scenePath`"))?;
+    let at_frame = take_number(fields, "atFrame")?.unwrap_or(0.0).max(0.0);
+    let moves = match fields.remove("moves") {
+        Some(Value::Array(items)) if !items.is_empty() => items,
+        Some(_) => return Err(scene_error("`moves` holds at least one move")),
+        None => return Err(scene_error("missing field `moves`")),
+    };
+    if let Some(unknown) = fields.keys().next() {
+        return Err(scene_error(format!("unknown field `{unknown}`")));
+    }
+    let steps: Vec<concat_scene::MovePreset> = moves
+        .into_iter()
+        .map(parse_move)
+        .collect::<Result<_, _>>()?;
+    let path = std::path::PathBuf::from(path);
+    let mut scene = concat_studio::load_scene(&path).map_err(scene_error)?;
+    let sequence = concat_scene::MoveSequence { steps };
+    scene.add_sequence(&sequence, at_frame);
+    concat_studio::save_scene(&path, &scene).map_err(scene_error)?;
+    Ok(Outcome::json(json!({
+        "scenePath": path.to_string_lossy(),
+        "scene": scene_summary(&scene),
+    })))
+}
+
+/// `scene_get`: the scene's layers and camera as JSON.
+fn scene_get(mut arguments: Value) -> Result<Outcome, ApiError> {
+    let fields = arguments
+        .as_object_mut()
+        .ok_or_else(|| scene_error("the arguments are an object"))?;
+    let path = take_string(fields, "scenePath")?
+        .ok_or_else(|| scene_error("missing field `scenePath`"))?;
+    if let Some(unknown) = fields.keys().next() {
+        return Err(scene_error(format!("unknown field `{unknown}`")));
+    }
+    let scene = concat_studio::load_scene(std::path::Path::new(&path)).map_err(scene_error)?;
+    Ok(Outcome::json(json!({
+        "scenePath": path,
+        "scene": scene_summary(&scene),
+    })))
+}
+
+fn scene_error(why: impl Into<String>) -> ApiError {
+    ApiError::invalid(format!("invalid arguments: {}", why.into()))
+}
+
+fn take_string(fields: &mut Map<String, Value>, key: &str) -> Result<Option<String>, ApiError> {
+    match fields.remove(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(_) => Err(scene_error(format!("`{key}` must be a string"))),
+    }
+}
+
+fn take_number(fields: &mut Map<String, Value>, key: &str) -> Result<Option<f64>, ApiError> {
+    match fields.remove(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .map(Some)
+            .ok_or_else(|| scene_error(format!("`{key}` must be a number"))),
+        Some(_) => Err(scene_error(format!("`{key}` must be a number"))),
+    }
+}
+
+fn take_bool(fields: &mut Map<String, Value>, key: &str) -> Result<Option<bool>, ApiError> {
+    match fields.remove(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(value)),
+        Some(_) => Err(scene_error(format!("`{key}` must be true or false"))),
+    }
+}
+
+fn parse_layer_kind(text: &str) -> Result<concat_scene::LayerKind, ApiError> {
+    match text {
+        "background" => Ok(concat_scene::LayerKind::Background),
+        "character" => Ok(concat_scene::LayerKind::Character),
+        "prop" => Ok(concat_scene::LayerKind::Prop),
+        "shape" => Ok(concat_scene::LayerKind::Shape),
+        "image" => Ok(concat_scene::LayerKind::Image),
+        other => Err(scene_error(format!(
+            "unknown layer kind `{other}` (background, character, prop, shape or image)"
+        ))),
+    }
+}
+
+fn parse_move(value: Value) -> Result<concat_scene::MovePreset, ApiError> {
+    use concat_camera::CameraMoveType;
+    let mut fields = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| scene_error("each move is an object"))?;
+    let kind_name =
+        take_string(&mut fields, "type")?.ok_or_else(|| scene_error("a move needs `type`"))?;
+    let factor = take_number(&mut fields, "factor")?.unwrap_or(1.2).max(1e-6);
+    let duration_frames = take_number(&mut fields, "durationFrames")?
+        .unwrap_or(30.0)
+        .max(1.0);
+    let easing = parse_easing(fields.remove("easing"))?;
+    let zoom = take_number(&mut fields, "zoom")?;
+    let target_zoom = take_number(&mut fields, "targetZoom")?
+        .or(zoom)
+        .unwrap_or(1.0)
+        .max(1e-6);
+    let kind = match kind_name.as_str() {
+        "push_in" => CameraMoveType::PushIn { factor },
+        "pull_out" => CameraMoveType::PullOut { factor },
+        "pan" => CameraMoveType::Pan {
+            delta_x: take_number(&mut fields, "deltaX")?.unwrap_or(0.0),
+            delta_y: take_number(&mut fields, "deltaY")?.unwrap_or(0.0),
+        },
+        "follow" => CameraMoveType::Follow,
+        "focus_target" => CameraMoveType::FocusTarget {
+            target_x: take_number(&mut fields, "targetX")?.unwrap_or(0.0),
+            target_y: take_number(&mut fields, "targetY")?.unwrap_or(0.0),
+            target_zoom,
+        },
+        other => {
+            return Err(scene_error(format!(
+                "unknown move type `{other}` (push_in, pull_out, pan, follow or focus_target)"
+            )));
+        }
+    };
+    let preset = concat_scene::MovePreset {
+        name: take_string(&mut fields, "name")?.unwrap_or_else(|| kind_name.clone()),
+        kind,
+        duration_frames,
+        easing,
+        target: take_string(&mut fields, "target")?,
+        offset_x: take_number(&mut fields, "offsetX")?.unwrap_or(0.0),
+        offset_y: take_number(&mut fields, "offsetY")?.unwrap_or(0.0),
+        zoom,
+    };
+    if let Some(unknown) = fields.keys().next() {
+        return Err(scene_error(format!("unknown field `{unknown}` in a move")));
+    }
+    Ok(preset)
+}
+
+fn parse_easing(value: Option<Value>) -> Result<concat_scene::Easing, ApiError> {
+    use concat_scene::Easing;
+    match value {
+        None | Some(Value::Null) => Ok(Easing::default()),
+        Some(Value::String(name)) => match name.as_str() {
+            "linear" => Ok(Easing::LINEAR),
+            "ease_in" => Ok(Easing::EASE_IN),
+            "ease_out" => Ok(Easing::EASE_OUT),
+            "ease_in_out" => Ok(Easing::EASE_IN_OUT),
+            other => Err(scene_error(format!(
+                "unknown easing `{other}` (linear, ease_in, ease_out or ease_in_out)"
+            ))),
+        },
+        Some(Value::Array(items)) if items.len() == 4 => {
+            let mut values = [0.0; 4];
+            for (index, item) in items.iter().enumerate() {
+                values[index] = item
+                    .as_f64()
+                    .ok_or_else(|| scene_error("easing holds four numbers"))?
+                    .clamp(0.0, 1.0);
+            }
+            Ok(Easing {
+                x1: values[0],
+                y1: values[1],
+                x2: values[2],
+                y2: values[3],
+            })
+        }
+        Some(_) => Err(scene_error(
+            "`easing` is a name or four numbers [x1, y1, x2, y2]",
+        )),
+    }
+}
+
+fn rate_of(fps: f64) -> (i64, i64) {
+    if (fps - fps.round()).abs() < 1e-9 {
+        (fps.round() as i64, 1)
+    } else {
+        ((fps * 1000.0).round() as i64, 1000)
+    }
+}
+
+fn scene_summary(scene: &concat_scene::Scene) -> Value {
+    let (width, height) = scene
+        .camera
+        .keys
+        .first()
+        .map(|key| (key.pose.viewport_width, key.pose.viewport_height))
+        .unwrap_or((1920, 1080));
+    let layers: Vec<Value> = scene
+        .layers
+        .iter()
+        .map(|layer| {
+            json!({
+                "id": layer.id,
+                "name": layer.name,
+                "kind": layer.kind,
+                "asset": layer.asset,
+                "x": layer.transform.x,
+                "y": layer.transform.y,
+                "scale": layer.transform.scale,
+                "rotationDeg": layer.transform.rotation_deg,
+                "z": layer.z,
+                "inFrame": layer.in_frame,
+                "durationFrames": layer.duration_frames,
+                "opacity": layer.opacity,
+                "visible": layer.visible,
+                "expression": layer.expression,
+            })
+        })
+        .collect();
+    let keys: Vec<Value> = scene
+        .camera
+        .keys
+        .iter()
+        .map(|key| {
+            json!({
+                "frame": key.frame,
+                "x": key.pose.x,
+                "y": key.pose.y,
+                "zoom": key.pose.zoom,
+                "rotationDeg": key.pose.rotation.to_degrees(),
+            })
+        })
+        .collect();
+    json!({
+        "id": scene.id,
+        "name": scene.name,
+        "world": { "width": scene.world_width, "height": scene.world_height },
+        "viewport": { "width": width, "height": height },
+        "fps": scene.fps(),
+        "durationFrames": scene.duration_frames(),
+        "background": scene.background,
+        "layers": layers,
+        "camera": { "keys": keys },
+    })
 }
 
 /// `clip_masks`: a clip patch with only its masks.
@@ -1199,6 +1756,19 @@ mod tests {
                 json!({ "scenePath": "/tmp/scene.json", "output": "/tmp/scene.mp4" }),
             ),
             (
+                "scene_create",
+                json!({ "scenePath": "/tmp/scene.json", "name": "Demo", "worldWidth": 8000, "width": 640, "height": 360, "fps": 30 }),
+            ),
+            (
+                "scene_add_layer",
+                json!({ "scenePath": "/tmp/scene.json", "id": "hero", "kind": "character", "asset": "/tmp/hero.png", "x": 3600.0, "y": 2250.0, "scale": 0.65, "z": 1 }),
+            ),
+            (
+                "scene_camera_move",
+                json!({ "scenePath": "/tmp/scene.json", "atFrame": 0, "moves": [{ "type": "follow", "target": "hero", "durationFrames": 30, "easing": "ease_in_out" }, { "type": "push_in", "factor": 1.2, "durationFrames": 30 }] }),
+            ),
+            ("scene_get", json!({ "scenePath": "/tmp/scene.json" })),
+            (
                 "preview_frame",
                 json!({ "path": "/tmp/Cut", "time": 1.5, "width": 320, "height": 180 }),
             ),
@@ -1257,8 +1827,12 @@ mod tests {
                 }
                 Action::PreviewFrame => request("preview.frame", sample.clone()),
                 Action::Mask => mask(sample.clone()),
-                // Scene rendering is not an API request; its schema was checked above.
-                Action::SceneRender => continue,
+                // Scene tools are not API requests; their schemas were checked above.
+                Action::SceneRender
+                | Action::SceneCreate
+                | Action::SceneAddLayer
+                | Action::SceneCameraMove
+                | Action::SceneGet => continue,
             };
             let built = built.unwrap_or_else(|error| panic!("{name}: {error}"));
             // Back again: the request as the API writes it fits the API's

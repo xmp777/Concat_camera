@@ -13,6 +13,7 @@ concat-api = { workspace = true, features = ["schema"] }
 # The window's server, reached as a client, and the file that says where
 # it is.
 concat-server.workspace = true
+concat-camera.workspace = true
 concat-scene.workspace = true
 concat-studio.workspace = true
 serde_json.workspace = true

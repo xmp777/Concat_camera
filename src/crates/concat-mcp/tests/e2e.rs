@@ -493,3 +493,121 @@ fn an_agent_renders_a_camera_scene_headless() {
     let duration = info.duration.expect("a duration").as_f64();
     assert!((duration - 3.0).abs() < 0.2, "duration {duration}");
 }
+
+/// An agent builds a two-character dialogue scene from nothing - no project
+/// open, no hand-written JSON - then moves the camera between the characters
+/// and renders it: the Phase 3 acceptance path.
+#[test]
+fn an_agent_builds_and_renders_a_two_character_scene_headless() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let home = scratch.path();
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../examples/camera_demo/assets")
+        .canonicalize()
+        .expect("the demo assets are in the repository");
+    let mut agent = Agent::spawn(home, "headless", &[]);
+    let (_, welcome) = agent.ask(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "e2e", "version": "1" },
+        }),
+    );
+    assert_eq!(welcome["result"]["protocolVersion"], "2025-06-18");
+    agent.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+
+    let scene_path = home.join("dialogue.json");
+    let created = agent.tool(
+        "scene_create",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "name": "双人对话",
+            "worldWidth": 8000.0,
+            "worldHeight": 4500.0,
+            "width": 640,
+            "height": 360,
+            "fps": 30,
+            "background": [0.10, 0.12, 0.15, 1.0],
+        }),
+    );
+    assert_eq!(created["structuredContent"]["scene"]["layers"], json!([]));
+
+    for (id, kind, asset, x, z) in [
+        ("bg", "background", "bg.png", 4000.0, 0),
+        ("hero", "character", "char_a.png", 3600.0, 1),
+        ("heroine", "character", "char_b.png", 4400.0, 2),
+    ] {
+        let asset = assets.join(asset);
+        let added = agent.tool(
+            "scene_add_layer",
+            json!({
+                "scenePath": scene_path.to_string_lossy(),
+                "id": id,
+                "name": id,
+                "kind": kind,
+                "asset": asset.to_string_lossy(),
+                "x": x,
+                "y": 2250.0,
+                "scale": if kind == "background" { 1.0 } else { 0.65 },
+                "z": z,
+                "durationFrames": 120.0,
+            }),
+        );
+        assert_eq!(
+            added["structuredContent"]["scene"]["layers"]
+                .as_array()
+                .map(Vec::len),
+            Some(z as usize + 1),
+            "{added}"
+        );
+    }
+
+    let moved = agent.tool(
+        "scene_camera_move",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "atFrame": 0,
+            "moves": [
+                { "type": "follow", "target": "hero", "durationFrames": 60, "zoom": 1.15, "easing": "ease_in_out" },
+                { "type": "follow", "target": "heroine", "durationFrames": 60, "easing": "ease_in_out" },
+            ],
+        }),
+    );
+    let camera = &moved["structuredContent"]["scene"]["camera"];
+    assert_eq!(camera["keys"].as_array().map(Vec::len), Some(3), "{moved}");
+
+    let read = agent.tool(
+        "scene_get",
+        json!({ "scenePath": scene_path.to_string_lossy() }),
+    );
+    let scene = &read["structuredContent"]["scene"];
+    assert_eq!(scene["layers"].as_array().map(Vec::len), Some(3));
+    assert_eq!(scene["viewport"]["width"], 640);
+    assert_eq!(scene["viewport"]["height"], 360);
+
+    let output = home.join("dialogue.mp4");
+    let rendered = agent.tool(
+        "scene_render",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "output": output.to_string_lossy(),
+            "crf": 30,
+            "preset": "ultrafast",
+        }),
+    );
+    assert!(output.is_file(), "the render writes the file: {rendered}");
+    let info = concat_media::probe(&output).expect("the file probes as media");
+    let video = info.require_video().expect("it has pictures");
+    assert_eq!((video.width, video.height), (640, 360));
+    let duration = info.duration.expect("a duration").as_f64();
+    assert!((duration - 4.0).abs() < 0.3, "duration {duration}");
+
+    // The file is a Concat project document with the scene under `scene`.
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(&scene_path).expect("read back"))
+            .expect("valid JSON");
+    assert!(document["concat"].is_string(), "a Concat document");
+    assert_eq!(document["scene"]["id"], "双人对话");
+    agent.end();
+}

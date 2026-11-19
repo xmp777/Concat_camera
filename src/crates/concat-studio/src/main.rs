@@ -4,8 +4,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use concat_scene::Scene;
-use concat_studio::{RenderOptions, render_scene};
+use concat_studio::{RenderOptions, load_scene, render_scene, save_scene};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -13,6 +12,35 @@ fn main() -> ExitCode {
         usage();
         return ExitCode::from(2);
     };
+    if command == "save" {
+        let Some(input) = args.next() else {
+            usage();
+            return ExitCode::from(2);
+        };
+        let Some(output) = args.next() else {
+            usage();
+            return ExitCode::from(2);
+        };
+        let input = PathBuf::from(input);
+        let scene = match load_scene(&input) {
+            Ok(scene) => scene,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let output_path = PathBuf::from(&output);
+        return match save_scene(&output_path, &scene) {
+            Ok(()) => {
+                println!("已保存工程场景：{output}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if command != "render" {
         usage();
         return ExitCode::from(2);
@@ -51,17 +79,10 @@ fn main() -> ExitCode {
     }
 
     let scene_path = PathBuf::from(scene_path);
-    let text = match std::fs::read_to_string(&scene_path) {
-        Ok(text) => text,
-        Err(error) => {
-            eprintln!("无法读取场景 {}：{error}", scene_path.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let scene: Scene = match serde_json::from_str(&text) {
+    let scene = match load_scene(&scene_path) {
         Ok(scene) => scene,
         Err(error) => {
-            eprintln!("场景 JSON 无效：{error}");
+            eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
@@ -90,5 +111,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() {
-    eprintln!("用法：concat-studio render <scene.json> <output.mp4> [--crf 20] [--preset medium]");
+    eprintln!(
+        "用法：\n  concat-studio render <scene.json> <output.mp4> [--crf 20] [--preset medium]\n  concat-studio save <scene.json> <project.json>"
+    );
 }
