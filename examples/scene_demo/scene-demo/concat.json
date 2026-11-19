@@ -1,0 +1,213 @@
+{
+  "activeTimelineId": "TL1",
+  "clips": [
+    {
+      "duration": 3.033333333333333,
+      "fadeIn": 0.0,
+      "fadeOut": 0.0,
+      "filters": [],
+      "id": "c1",
+      "kind": "scene",
+      "mediaId": "",
+      "name": "Demo",
+      "offsetX": 0.0,
+      "offsetY": 0.0,
+      "opacity": 1.0,
+      "preservePitch": true,
+      "rotation": 0.0,
+      "scale": 1.0,
+      "sceneId": "sc1",
+      "sourceStart": 0.0,
+      "speed": 1.0,
+      "start": 0.0,
+      "trackId": "T1",
+      "videoEffects": [],
+      "volume": 1.0
+    }
+  ],
+  "concat": "0.1.0",
+  "fonts": [],
+  "media": [],
+  "name": "scene-demo",
+  "scene": {
+    "background": [
+      0.05999999865889549,
+      0.07999999821186066,
+      0.09000000357627869,
+      1.0
+    ],
+    "camera": {
+      "keys": [
+        {
+          "easing": {
+            "x1": 0.42,
+            "x2": 0.58,
+            "y1": 0.0,
+            "y2": 1.0
+          },
+          "frame": 0.0,
+          "pose": {
+            "rotation": 0.0,
+            "viewport_height": 1080,
+            "viewport_width": 1920,
+            "x": 2000.0,
+            "y": 1125.0,
+            "zoom": 1.0
+          }
+        },
+        {
+          "easing": {
+            "x1": 0.0,
+            "x2": 1.0,
+            "y1": 0.0,
+            "y2": 1.0
+          },
+          "frame": 90.0,
+          "pose": {
+            "rotation": 0.0,
+            "viewport_height": 1080,
+            "viewport_width": 1920,
+            "x": 2000.0,
+            "y": 1125.0,
+            "zoom": 1.6
+          }
+        }
+      ]
+    },
+    "duration_frames": 90.0,
+    "id": "sc1",
+    "layers": [
+      {
+        "asset": "bg.png",
+        "duration_frames": 0.0,
+        "id": "bg",
+        "in_frame": 0.0,
+        "kind": "background",
+        "name": "背景",
+        "opacity": 1.0,
+        "transform": {
+          "rotation_deg": 0.0,
+          "scale": 1.0,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "visible": true,
+        "z": 0
+      },
+      {
+        "asset": "hero.png",
+        "duration_frames": 60.0,
+        "id": "hero",
+        "in_frame": 30.0,
+        "kind": "character",
+        "name": "主角",
+        "opacity": 1.0,
+        "transform": {
+          "rotation_deg": 0.0,
+          "scale": 1.0,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "visible": true,
+        "z": 1
+      }
+    ],
+    "name": "Demo",
+    "rate_den": 1,
+    "rate_num": 30,
+    "world_height": 2250.0,
+    "world_width": 4000.0
+  },
+  "timelines": [
+    {
+      "clips": [
+        {
+          "duration": 3.033333333333333,
+          "fadeIn": 0.0,
+          "fadeOut": 0.0,
+          "filters": [],
+          "id": "c1",
+          "kind": "scene",
+          "mediaId": "",
+          "name": "Demo",
+          "offsetX": 0.0,
+          "offsetY": 0.0,
+          "opacity": 1.0,
+          "preservePitch": true,
+          "rotation": 0.0,
+          "scale": 1.0,
+          "sceneId": "sc1",
+          "sourceStart": 0.0,
+          "speed": 1.0,
+          "start": 0.0,
+          "trackId": "T1",
+          "videoEffects": [],
+          "volume": 1.0
+        }
+      ],
+      "id": "TL1",
+      "name": "Timeline 1",
+      "tracks": [
+        {
+          "id": "T1",
+          "muted": false,
+          "visible": true
+        },
+        {
+          "id": "T2",
+          "muted": false,
+          "visible": true
+        },
+        {
+          "id": "T3",
+          "muted": false,
+          "visible": true
+        },
+        {
+          "id": "T4",
+          "muted": false,
+          "visible": true
+        }
+      ],
+      "video": {
+        "height": 1080,
+        "rateDen": 1,
+        "rateNum": 30,
+        "width": 1920
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "id": "T1",
+      "muted": false,
+      "visible": true
+    },
+    {
+      "id": "T2",
+      "muted": false,
+      "visible": true
+    },
+    {
+      "id": "T3",
+      "muted": false,
+      "visible": true
+    },
+    {
+      "id": "T4",
+      "muted": false,
+      "visible": true
+    }
+  ],
+  "version": 2,
+  "video": {
+    "height": 1080,
+    "rateDen": 1,
+    "rateNum": 30,
+    "width": 1920
+  }
+}

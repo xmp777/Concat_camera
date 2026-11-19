@@ -545,4 +545,165 @@ mod tests {
         assert!(opened.is_err(), "a half document is not an empty project");
         let _ = std::fs::remove_dir_all(&scratch);
     }
+
+    /// A real one-by-one PNG, the smallest asset the probe and the
+    /// compositor both accept.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+        0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// A two-layer scene: a background the whole way through and a
+    /// character over its second half, with the camera pushing in.
+    fn demo_scene() -> concat_scene::Scene {
+        let mut scene = concat_scene::Scene::new("sc1", "Demo", 4000.0, 2250.0, 1920, 1080);
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "bg".into(),
+            name: "背景".into(),
+            kind: concat_scene::LayerKind::Background,
+            asset: Some("bg.png".into()),
+            transform: Default::default(),
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        });
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "hero".into(),
+            name: "主角".into(),
+            kind: concat_scene::LayerKind::Character,
+            asset: Some("hero.png".into()),
+            transform: Default::default(),
+            in_frame: 30.0,
+            duration_frames: 60.0,
+            opacity: 1.0,
+            visible: true,
+            z: 1,
+            expression: None,
+        });
+        scene.camera.add_key(
+            90.0,
+            concat_camera::VirtualCamera {
+                zoom: 1.6,
+                ..scene.camera.pose_at(90.0)
+            },
+            concat_scene::Easing::LINEAR,
+        );
+        scene
+    }
+
+    /// The seam the stage is about: a scene clip on the timeline flattens
+    /// into camera-baked image clips, so preview and export - the one
+    /// `flattened_clips` seam - see the scene exactly as it renders.
+    #[test]
+    fn a_scene_clip_flattens_into_camera_baked_image_clips() {
+        let scratch =
+            std::env::temp_dir().join(format!("concat-scene-flatten-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).expect("scratch dir");
+        let info = projects::create(
+            &scratch.to_string_lossy(),
+            "Scene project",
+            1920,
+            1080,
+            30,
+            1,
+            [0, 0, 0, 255],
+        )
+        .expect("creates");
+        // The project folder is what `create` minted under the scratch
+        // root, and where scene assets resolve from.
+        let folder = std::path::Path::new(&info.path);
+        std::fs::write(folder.join("bg.png"), TINY_PNG).expect("bg asset");
+        std::fs::write(folder.join("hero.png"), TINY_PNG).expect("hero asset");
+        let mut session = Session::open_info(&info).expect("opens");
+        session
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 1.0,
+                scene: demo_scene(),
+                name: None,
+            })
+            .expect("places the scene clip");
+
+        let flattened = session.flattened_clips();
+        assert!(
+            flattened
+                .iter()
+                .all(|clip| clip.kind == concat_export::ClipKind::Image),
+            "every flattened clip is the image a layer became"
+        );
+        assert_eq!(flattened.len(), 2, "one clip per visible layer");
+        // The background spans the clip's whole window from its start; the
+        // character rides its second half.
+        let (bg, hero) = (
+            flattened
+                .iter()
+                .find(|clip| clip.duration > 3.0)
+                .expect("the background clip"),
+            flattened
+                .iter()
+                .find(|clip| clip.duration <= 3.0)
+                .expect("the character clip"),
+        );
+        assert!((bg.start - 1.0).abs() < 1e-9);
+        assert!((bg.duration - 91.0 / 30.0).abs() < 1e-6, "91 frames at 30");
+        assert!((hero.start - 2.0).abs() < 1e-9);
+        // The push-in is baked: the layer's scale rides between its first
+        // and last key, and both ends carry keys.
+        for clip in [bg, hero] {
+            let scales: Vec<_> = clip
+                .animation
+                .iter()
+                .filter(|key| key.property == "scale")
+                .collect();
+            assert!(scales.len() >= 2, "camera motion baked, not static");
+            assert_ne!(scales[0].value, scales[scales.len() - 1].value);
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Not a test: regenerates the scene-clip demo project the editor is
+    /// walked through with. `cargo test -p concat-host -- --ignored
+    /// make_the_scene_clip_demo_project`.
+    #[test]
+    #[ignore = "writes the demo project under examples/scene_demo/"]
+    fn make_the_scene_clip_demo_project() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/scene_demo");
+        let _ = std::fs::remove_dir_all(&root);
+        let info = projects::create(
+            &root.to_string_lossy(),
+            "scene-demo",
+            1920,
+            1080,
+            30,
+            1,
+            [0, 0, 0, 255],
+        )
+        .expect("creates");
+        // `create` mints the project folder under the root; the assets
+        // live beside the manifest, where scene paths resolve from.
+        let folder = std::path::Path::new(&info.path);
+        std::fs::write(folder.join("bg.png"), TINY_PNG).expect("bg asset");
+        std::fs::write(folder.join("hero.png"), TINY_PNG).expect("hero asset");
+        let mut session = Session::open_info(&info).expect("opens");
+        session
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 0.0,
+                scene: demo_scene(),
+                name: None,
+            })
+            .expect("places the scene clip");
+        session.save(None).expect("saves");
+        println!("demo project at {}", info.path);
+    }
 }

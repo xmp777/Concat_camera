@@ -24,6 +24,10 @@ concat-export.workspace = true
 # Scene clips expand into camera-baked image clips before flatten sees
 # them; the expansion lives with the rest of the scene-to-clip logic.
 concat-studio.workspace = true
+# The scene a scene clip plays, and the camera its pose comes from: the
+# session flattens the scene into the timeline, and the tests build one.
+concat-scene.workspace = true
+concat-camera.workspace = true
 # The effect cards: every picture package drawn by its own shader; see
 # cards.rs.
 concat-effects.workspace = true

@@ -1,0 +1,10 @@
+{
+  "concat": "0.2.12",
+  "name": "scene-demo",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "rateNum": 30,
+    "rateDen": 1
+  }
+}
