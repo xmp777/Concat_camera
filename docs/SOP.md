@@ -253,20 +253,20 @@ git push origin main
 
 ---
 
-## 10. 当前进度（2026-11-19）
+## 10. 当前进度（2026-11-20）
 
 | 项 | 状态 |
 |---|---|
 | Phase 0 审计 | ✅（`docs/CAMERA_DESIGN.md`、`HANDOVER.md`、研究文档已整合） |
 | Phase 1 Headless 场景+相机 | ✅ 核心完成（`concat-scene`、`concat-studio`、示例 MP4） |
-| Phase 2 运镜 | ✅ 核心完成（相对/跟随/组合烘焙；曲线编辑器 UI 待 Phase 4） |
+| Phase 2 运镜 | ✅ 核心完成（相对/跟随/组合烘焙；曲线编辑器 UI 待做） |
 | Phase 3 MCP | ✅ 核心完成（`scene_create/add_layer/camera_move/get/render` + 工程持久化 + e2e） |
-| Phase 4 Slint UI | 🟡 场景视口 + 编辑器 `Scene` 面板；原生时间轴 playhead 已接入；Scene 片段/检查器待做 |
-| Phase 5 剪辑增强 | ⬜ 未开始 |
+| Phase 4 Slint UI | ✅ 场景视口 + 编辑器 `Scene` 面板；原生 playhead 驱动 |
+| Phase 5 Scene 片段 + Camera 检查器 | ✅ Scene 片段（本地时间/命令化拖拽/插入时间轴）+ Inspector 相机区 + 预览/导出统一展开；两轮审查 P0 全清 |
 | Phase 6 资产/ASR | ⬜ 未开始 |
 | Phase 7 网络/AI | ⬜ 未开始 |
 
-**下一步建议**：人工验收编辑器 `Scene` 面板（Add panel → Open → 滑杆/拖动/保存）→ 场景加入工作区预设 → 编辑器预览/导出接相机 → 图形图层素材化 → 跟随逐帧解算/边界约束 → parallax。
+**下一步建议**：人工走查 scene-demo（拖相机/插入/导出/undo；确认 Scene 面板图片显示）→ Session 级展开缓存 → 图形图层素材化 → 多场景（`scenes` map）→ 跟随逐帧解算 → parallax（stash 待清）。
 
 ---
 

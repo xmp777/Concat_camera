@@ -354,3 +354,13 @@ pub struct MoveSequence { pub steps: Vec<MovePreset> }
 - 2026-11-19（Phase 4 Spike）：新增 `concat-scene-view`（Slint 独立窗口，显示场景帧、拖动相机、保存）；
   `concat-studio` 新增 `preview_frame`/`preview_frame_sized`（复用 Concat 预览合成器）与预览单测；
   截图 `docs/assets/scene_view_spike.png`。编辑器内可停靠 Pane 的接线仍待做。
+- 2026-11-20（Phase 5）：**Scene 成为时间轴片段**——`ClipKind::Scene` + `scene_id`，命令
+  `AddSceneClip`/`SetSceneCameraKey`/`RemoveSceneCameraKey`（场景存文档顶层 `scene`，快照 undo）。
+  `concat_studio::expand_project_scenes` 把片段展开为逐层图像片段（**每层一条轨**——合成器每轨一 clip，
+  共轨会丢层；相机按窗口采样烘焙进 Scale/Offset/Rotation/Stretch 关键帧；背景走 background 语义）。
+  监视器与导出（`request_for`）flatten 前统一展开；`Session::flattened_clips` 同点。编辑器 Scene 面板
+  跟随工程场景（revision 门控同步）+ playhead→片段本地帧（片段外钳制最近边界帧）+ 拖动相机入命令栈
+  （手势折叠）；Inspector 的 Scene 片段标签 = 相机（X/Y/Zoom/Rotation，度；只覆写拨动字段）+ 移除关键帧。
+  两轮子代理审查 4 个 P0 全清（共轨丢层/监视器导出未接展开/sync 极性/占位面板污染），细节与豁免见
+  `docs/handovers/2026-11-20-scene-clip-camera.md`。截图 `docs/assets/scene_clip_*.png`。
+  待办：Session 级展开缓存、场景片段的 speed/裁剪语义、`scenes` map 多场景、SceneBad 错误拆分。

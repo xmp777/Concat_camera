@@ -1,10 +1,10 @@
-# Concat_camera 交接单（Phase 4 审查修复后）
+# Concat_camera 交接单（Phase 5：Scene 时间轴片段 + Inspector Camera）
 
-> 最后更新：2026-11-19
+> 最后更新：2026-11-20
 > 仓库：`G:\Projects\Concat_camera`（fork of `jub0t/Concat`，AGPL-3.0-or-later）
 > 远程：`origin` = `xmp777/Concat_camera`，`upstream` = `jub0t/Concat`
-> 当前：**P0/P1/Phase 2/3 完成；Phase 4 场景视口 + 编辑器 Scene 面板完成，子代理审查 P0/P1 已修复并回归通过；Windows-only，MSVC 基线**
-> **接手请先读 `docs/SOP.md` 与 `docs/CAMERA_DESIGN.md`；阶段详情见 `docs/handovers/2026-11-19-phase4-scene-pane.md`。**
+> 当前：**Phase 5 完成——Scene 是时间轴片段（本地时间/拖拽入栈/Inspector Camera 区），预览与导出经同一展开产出相机正确的场景帧；两轮子代理审查 P0 全清；Windows-only，MSVC 基线**
+> **接手请先读 `docs/SOP.md` 与 `docs/CAMERA_DESIGN.md`；阶段详情见 `docs/handovers/2026-11-20-scene-clip-camera.md`。**
 
 ---
 
@@ -30,6 +30,15 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 ---
 
 ## 1. 已完成
+
+### Phase 5（本次，2026-11-20）——Scene 时间轴片段 + Inspector Camera
+
+- **模型**：`ClipKind::Scene` + `Clip.scene_id`；命令 `AddSceneClip`/`SetSceneCameraKey`/`RemoveSceneCameraKey`（快照 undo；场景存文档顶层 `scene`，与 `concat-studio::SCENE_KEY` 同键）。
+- **展开**：`concat_studio::expand_project_scenes` 把 Scene 片段替换为逐层图像片段（**每层一条轨**——合成器每轨一 clip），相机按窗口采样烘焙进 Scale/Offset/Rotation/Stretch 关键帧；背景走 Concat 的 background 语义。预览（监视器 flatten + `Session::flattened_clips`）与导出（`request_for`）共用这一展开。
+- **编辑器**：Scene 面板跟随工程场景（嵌入模式，revision 门控同步）；playhead → 片段本地帧（`scene_frame_at`，片段外钳制最近边界帧）；拖动相机入命令栈（手势折叠）；Inspector 的 Scene 片段标签 = **相机**（X/Y/Zoom/Rotation + 移除关键帧）；时间轴金色场景片段 + "插入时间轴"；26 locale 新键。
+- **审查**：两个只读子代理——4 个 P0 全部实锤修复（共轨丢层/监视器与导出未接展开/sync 极性反/占位面板污染），P1 修复（TrackGone 半改状态、stretch 丢烘、手势结束点、revision 门控、standalone 守卫、generation bump），P2 记录于阶段交接。
+- **最终回归**：camera 6 / scene 12 / project 266 / studio 7 / host lib 172 / mcp 10+5 / editor 244；`cargo build -p concat`（MSVC）通过；headless 渲染 demo 工程 3.033s h264 1920×1080。
+- **待人工走查**：Scene 面板图片黑屏（帧计数正确、无错误，疑截图时序）；Camera 行数值在片段外时刻的口径（缩放 1.41 的来源待复核）。
 
 ### P0（已推送，commit `977a6946` 起）
 - `concat-camera`：世界↔视口投影、图层 Transform 投影、两机位插值、运镜预设雏形（6 tests）。
