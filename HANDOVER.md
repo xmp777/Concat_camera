@@ -125,5 +125,10 @@ docs/CAMERA_DESIGN.md # 设计/坐标/限制/P1 方案
 072171ab feat(camera): introduce concat-camera crate...
 ```
 
+### 上游同步（2026-11-19）
+- `git fetch upstream && git merge --no-ff upstream/main`：**无冲突合并**（上游 v0.2.8/v0.2.9 已包含 beats/waveform/导出修复）。
+- 合并后 MSVC 下 `cargo test` 全部通过（camera 6、scene 5、mcp 10+4、studio 编译）。
+- 我们的修改集中在 **新增 crate**（concat-camera/scene/studio）与少量钩子（`FramePlan.camera`），所以合并成本低。
+
 > 注意：`src/` 下有 `rustup override`（MSVC）。GNU 仍可用 `cargo +1.93.1-x86_64-pc-windows-gnu` 临时构建，
 > 但正式基线为 MSVC + `vcvars64.bat`。
