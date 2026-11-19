@@ -1161,6 +1161,7 @@ version = "0.2.12"
 dependencies = [
  "block2 0.6.2",
  "concat-api",
+ "concat-camera",
  "concat-core",
  "concat-effects",
  "concat-export",

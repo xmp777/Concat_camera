@@ -504,7 +504,7 @@ pub fn catalogue() -> Vec<Tool> {
         Tool {
             name: "scene_create",
             title: "Create a 2D scene",
-            description: "Creates a 2D scene file at `scenePath` as a Concat project document. `name` names it; `worldWidth`/`worldHeight` are the world canvas (8000x4500), `width`/`height` the output frame (1920x1080), `fps` 30, `background` RGBA 0-1. The camera starts centred. An existing file is kept unless `overwrite` is true.",
+            description: "Creates a 2D scene file at `scenePath` as a Concat project document. `name` names it; `worldWidth`/`worldHeight` are the world canvas (8000x4500), `width`/`height` the output frame (1920x1080), `fps` 30, `durationFrames` 90, `background` RGBA 0-1. The camera starts centred. An existing file is kept unless `overwrite` is true.",
             read_only: false,
             destructive: true,
             idempotent: false,
@@ -729,6 +729,7 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
                 "width": { "type": "integer", "minimum": 1, "default": 1920, "description": "Frame width." },
                 "height": { "type": "integer", "minimum": 1, "default": 1080, "description": "Frame height." },
                 "fps": { "type": "number", "minimum": 1, "default": 30, "description": "Frames per second." },
+                "durationFrames": { "type": "number", "minimum": 1, "default": 90, "description": "Scene length in frames (90)." },
                 "background": {
                     "type": "array",
                     "items": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -908,6 +909,7 @@ fn edit(op: &str, mut arguments: Value) -> Result<Request, ApiError> {
 
 fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, ApiError> {
     let backend = context.backend;
+    let roots = backend.writes_under();
     match tool.action {
         Action::Method { method, reply } => {
             let result = backend.call(request(method, arguments)?)?;
@@ -935,10 +937,10 @@ fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, A
         }
         Action::ExportWait => export_wait(arguments, backend, context.cancelled, context.progress),
         Action::PreviewFrame => preview(arguments, backend),
-        Action::SceneRender => scene_render(arguments),
-        Action::SceneCreate => scene_create(arguments),
-        Action::SceneAddLayer => scene_add_layer(arguments),
-        Action::SceneCameraMove => scene_camera_move(arguments),
+        Action::SceneRender => scene_render(arguments, &roots, context.cancelled, context.progress),
+        Action::SceneCreate => scene_create(arguments, &roots),
+        Action::SceneAddLayer => scene_add_layer(arguments, &roots),
+        Action::SceneCameraMove => scene_camera_move(arguments, &roots),
         Action::SceneGet => scene_get(arguments),
         Action::Mask => {
             let result = backend.call(mask(arguments)?)?;
@@ -948,7 +950,12 @@ fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, A
 }
 
 /// `scene_render`: a concat-scene JSON through Concat's own export pipeline.
-fn scene_render(mut arguments: Value) -> Result<Outcome, ApiError> {
+fn scene_render(
+    mut arguments: Value,
+    roots: &[std::path::PathBuf],
+    cancelled: &AtomicBool,
+    report: Option<&dyn Fn(f64, f64, String)>,
+) -> Result<Outcome, ApiError> {
     let invalid = |why: &str| ApiError::invalid(format!("invalid arguments: {why}"));
     let fields = arguments
         .as_object_mut()
@@ -973,6 +980,7 @@ fn scene_render(mut arguments: Value) -> Result<Outcome, ApiError> {
     if let Some(unknown) = fields.keys().next() {
         return Err(invalid(&format!("unknown field `{unknown}`")));
     }
+    ensure_writable(std::path::Path::new(&output), roots)?;
 
     let scene = concat_studio::load_scene(std::path::Path::new(&scene_path))
         .map_err(|error| invalid(&error))?;
@@ -984,14 +992,23 @@ fn scene_render(mut arguments: Value) -> Result<Outcome, ApiError> {
         crf,
         preset,
     };
-    let mut progress = |_: i64, _: i64, _: &'static str| {};
-    concat_studio::render_scene(&scene, scene_dir, &options, &mut progress)
-        .map_err(ApiError::invalid)?;
+    let mut progress = |frame: i64, total: i64, stage: &'static str| {
+        if let Some(report) = report {
+            let fraction = if total > 0 {
+                (frame as f64 / total as f64).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            report(fraction, 1.0, format!("{stage} {frame}/{total}"));
+        }
+    };
+    concat_studio::render_scene_with_cancel(&scene, scene_dir, &options, cancelled, &mut progress)
+        .map_err(ApiError::failed)?;
     Ok(Outcome::json(json!({ "output": output })))
 }
 
 /// `scene_create`: a new Concat project document holding a 2D scene.
-fn scene_create(mut arguments: Value) -> Result<Outcome, ApiError> {
+fn scene_create(mut arguments: Value, roots: &[std::path::PathBuf]) -> Result<Outcome, ApiError> {
     let fields = arguments
         .as_object_mut()
         .ok_or_else(|| scene_error("the arguments are an object"))?;
@@ -1007,6 +1024,9 @@ fn scene_create(mut arguments: Value) -> Result<Outcome, ApiError> {
     let width = take_number(fields, "width")?.unwrap_or(1920.0).max(1.0) as u32;
     let height = take_number(fields, "height")?.unwrap_or(1080.0).max(1.0) as u32;
     let fps = take_number(fields, "fps")?.unwrap_or(30.0).max(1.0);
+    let duration_frames = take_number(fields, "durationFrames")?
+        .unwrap_or(90.0)
+        .max(1.0);
     let background = match fields.remove("background") {
         None | Some(Value::Null) => [0.06, 0.08, 0.09, 1.0],
         Some(Value::Array(items)) if items.len() == 4 => {
@@ -1027,6 +1047,7 @@ fn scene_create(mut arguments: Value) -> Result<Outcome, ApiError> {
     }
 
     let path = std::path::PathBuf::from(path);
+    ensure_writable(&path, roots)?;
     if path.exists() && !overwrite {
         return Err(scene_error(format!(
             "{} already exists (pass `overwrite: true` to replace it)",
@@ -1040,6 +1061,7 @@ fn scene_create(mut arguments: Value) -> Result<Outcome, ApiError> {
     scene.rate_num = rate_num;
     scene.rate_den = rate_den;
     scene.background = background;
+    scene.duration_frames = Some(duration_frames);
     concat_studio::save_scene(&path, &scene).map_err(scene_error)?;
     Ok(Outcome::json(json!({
         "scenePath": path.to_string_lossy(),
@@ -1048,7 +1070,10 @@ fn scene_create(mut arguments: Value) -> Result<Outcome, ApiError> {
 }
 
 /// `scene_add_layer`: add or update one layer, keeping fields not given.
-fn scene_add_layer(mut arguments: Value) -> Result<Outcome, ApiError> {
+fn scene_add_layer(
+    mut arguments: Value,
+    roots: &[std::path::PathBuf],
+) -> Result<Outcome, ApiError> {
     let fields = arguments
         .as_object_mut()
         .ok_or_else(|| scene_error("the arguments are an object"))?;
@@ -1056,6 +1081,7 @@ fn scene_add_layer(mut arguments: Value) -> Result<Outcome, ApiError> {
         .ok_or_else(|| scene_error("missing field `scenePath`"))?;
     let id = take_string(fields, "id")?.ok_or_else(|| scene_error("missing field `id`"))?;
     let path = std::path::PathBuf::from(path);
+    ensure_writable(&path, roots)?;
     let mut scene = concat_studio::load_scene(&path).map_err(scene_error)?;
     let existing = scene
         .layers
@@ -1153,7 +1179,10 @@ fn scene_add_layer(mut arguments: Value) -> Result<Outcome, ApiError> {
 }
 
 /// `scene_camera_move`: bake one relative move sequence into the camera track.
-fn scene_camera_move(mut arguments: Value) -> Result<Outcome, ApiError> {
+fn scene_camera_move(
+    mut arguments: Value,
+    roots: &[std::path::PathBuf],
+) -> Result<Outcome, ApiError> {
     let fields = arguments
         .as_object_mut()
         .ok_or_else(|| scene_error("the arguments are an object"))?;
@@ -1173,6 +1202,7 @@ fn scene_camera_move(mut arguments: Value) -> Result<Outcome, ApiError> {
         .map(parse_move)
         .collect::<Result<_, _>>()?;
     let path = std::path::PathBuf::from(path);
+    ensure_writable(&path, roots)?;
     let mut scene = concat_studio::load_scene(&path).map_err(scene_error)?;
     let sequence = concat_scene::MoveSequence { steps };
     scene.add_sequence(&sequence, at_frame);
@@ -1202,6 +1232,48 @@ fn scene_get(mut arguments: Value) -> Result<Outcome, ApiError> {
 
 fn scene_error(why: impl Into<String>) -> ApiError {
     ApiError::invalid(format!("invalid arguments: {}", why.into()))
+}
+
+/// Refuse a scene write outside the roots this backend serves. The scene
+/// tools write files directly, so they must apply the same sandbox as the
+/// API's project tools.
+fn ensure_writable(path: &std::path::Path, roots: &[std::path::PathBuf]) -> Result<(), ApiError> {
+    if roots.is_empty() {
+        return Ok(());
+    }
+    let Some(candidate) = normalize_for_roots(path) else {
+        return Err(ApiError::failed(format!(
+            "cannot resolve {} under the write roots",
+            path.display()
+        )));
+    };
+    let allowed = roots.iter().any(|root| {
+        let root = normalize_for_roots(root).unwrap_or_else(|| root.clone());
+        candidate.starts_with(&root)
+    });
+    if allowed {
+        Ok(())
+    } else {
+        Err(ApiError::failed(format!(
+            "{} is outside where this API writes",
+            path.display()
+        )))
+    }
+}
+
+/// Canonicalize a path for root comparison, stripping Windows' verbatim
+/// prefix so `\\?\C:\Users\me` and `C:\Users\me` compare equal.
+fn normalize_for_roots(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let absolute = if path.exists() {
+        path.canonicalize().ok()?
+    } else {
+        let parent = path.parent()?.canonicalize().ok()?;
+        parent.join(path.file_name()?)
+    };
+    let text = absolute.to_string_lossy();
+    Some(std::path::PathBuf::from(
+        text.strip_prefix(r"\\?\").unwrap_or(&text),
+    ))
 }
 
 fn take_string(fields: &mut Map<String, Value>, key: &str) -> Result<Option<String>, ApiError> {

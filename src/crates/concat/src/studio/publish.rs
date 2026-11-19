@@ -199,14 +199,30 @@ impl Studio {
     pub fn publish_frame(&self, app: &App) {
         app.global::<Editor>()
             .set_preview_frame(self.monitor.image.clone());
+        self.publish_scene_only(app);
+    }
+
+    /// The scene pane's own state, for callbacks and frame arrivals that change
+    /// nothing else in the window: no lane/clip rebuild.
+    pub fn publish_scene(&self, app: &App, _models: &Models) {
+        self.publish_scene_only(app);
+    }
+
+    fn publish_scene_only(&self, app: &App) {
         let scene = app.global::<crate::ui::SceneView>();
         scene.set_frame(self.scene.image.clone());
         scene.set_frame_number(self.scene.frame);
         scene.set_max_frame(self.scene.max_frame);
         scene.set_status(self.scene.status.clone());
-        // A timeline with clips drives the scene's frame; an empty one cannot,
-        // so the pane's own slider is the way to walk the scene there.
-        scene.set_show_frame_slider(self.duration() <= 0.0);
+        scene.set_has_scene(self.scene.has_scene());
+        // A scene represented by a long enough timeline is driven by the
+        // playhead; a scene longer than the timeline keeps its own slider so
+        // the rest of it can still be walked.
+        let scene_seconds = self.scene.duration_seconds().unwrap_or(0.0);
+        let timeline_seconds = f64::from(self.duration());
+        scene.set_show_frame_slider(
+            self.scene.has_scene() && timeline_seconds + 0.05 < scene_seconds,
+        );
     }
 
     /// The timeline and the readouts that follow it: what runs on every

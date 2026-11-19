@@ -4,6 +4,7 @@
 //! 把 `concat-scene` 的 2D 场景转换为 `concat-export` 的导出请求，并调用
 //! Concat 自己的 GPU 合成/编码管线输出 MP4。这里不实现任何解码、合成或编码。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -114,8 +115,21 @@ pub fn render_scene(
     options: &RenderOptions,
     progress: &mut dyn FnMut(i64, i64, &'static str),
 ) -> Result<(), String> {
+    let cancel = AtomicBool::new(false);
+    render_scene_with_cancel(scene, scene_dir, options, &cancel, progress)
+}
+
+/// Render with a caller-owned cancel flag, so an MCP client or a dialog can
+/// stop a long scene export between frames.
+pub fn render_scene_with_cancel(
+    scene: &Scene,
+    scene_dir: &Path,
+    options: &RenderOptions,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(i64, i64, &'static str),
+) -> Result<(), String> {
     let (width, height) = viewport_of(scene);
-    let clips = scene_clips(scene, scene_dir)?;
+    let clips = scene_clips(scene, scene_dir, &mut HashMap::new())?;
     let canvas = canvas_of(scene);
 
     let request_value = json!({
@@ -147,11 +161,7 @@ pub fn render_scene(
             .map_err(|e| format!("无法创建输出目录 {}：{e}", parent.display()))?;
     }
 
-    let cancel = AtomicBool::new(false);
-    let reporter = Reporter {
-        progress,
-        cancel: &cancel,
-    };
+    let reporter = Reporter { progress, cancel };
     render_on(&request, None, reporter).map_err(|e| format!("导出失败：{e}"))?;
     Ok(())
 }
@@ -161,6 +171,67 @@ pub struct PreviewFrame {
     pub pixels: Vec<u8>,
     pub width: u32,
     pub height: u32,
+}
+
+/// 复用解码器与素材尺寸的场景预览器。
+///
+/// 编辑器拖动/滑杆会在同一场景上连续取帧；每次新建 `ReaderPool` 并重新
+/// `probe` 所有素材会让固定开销盖过像素合成。这里保留池与素材尺寸缓存，
+/// 每次只按当前帧构建一次静态图层，而不是烘焙整条相机轨道。
+pub struct ScenePreviewer {
+    pool: ReaderPool,
+    probes: HashMap<PathBuf, (u32, u32)>,
+}
+
+impl Default for ScenePreviewer {
+    fn default() -> Self {
+        Self {
+            pool: ReaderPool::new(64 * 1024 * 1024, 4),
+            probes: HashMap::new(),
+        }
+    }
+}
+
+impl ScenePreviewer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 渲染场景的当前帧；`width == 0 || height == 0` 时使用场景输出尺寸。
+    pub fn preview_frame(
+        &mut self,
+        scene: &Scene,
+        scene_dir: &Path,
+        frame: f64,
+        width: u32,
+        height: u32,
+    ) -> Result<PreviewFrame, String> {
+        let (scene_width, scene_height) = viewport_of(scene);
+        let (width, height) = if width == 0 || height == 0 {
+            (scene_width, scene_height)
+        } else {
+            (width, height)
+        };
+        let clips = scene_clips_at(scene, scene_dir, frame, &mut self.probes)?;
+        let request_value = json!({
+            "time": frame.max(0.0) / scene.fps(),
+            "width": width,
+            "height": height,
+            "rateNum": scene.rate_num.max(1),
+            "rateDen": scene.rate_den.max(1),
+            "clips": clips,
+            "canvas": canvas_of(scene),
+        });
+        let request: PreviewFrameRequest = serde_json::from_value(request_value)
+            .map_err(|error| format!("预览请求无效：{error}"))?;
+        let pixels = concat_export::preview_frame(&self.pool, &request)
+            .map_err(|error| format!("预览失败：{error}"))?;
+        Ok(PreviewFrame {
+            pixels,
+            width,
+            height,
+        })
+    }
 }
 
 /// 用 Concat 自己的预览合成器渲染场景中的一帧（CPU RGBA）。
@@ -179,37 +250,15 @@ pub fn preview_frame_sized(
     width: u32,
     height: u32,
 ) -> Result<PreviewFrame, String> {
-    let (scene_width, scene_height) = viewport_of(scene);
-    let (width, height) = if width == 0 || height == 0 {
-        (scene_width, scene_height)
-    } else {
-        (width, height)
-    };
-    let clips = scene_clips(scene, scene_dir)?;
-    let canvas = canvas_of(scene);
-    let request_value = json!({
-        "time": frame.max(0.0) / scene.fps(),
-        "width": width,
-        "height": height,
-        "rateNum": scene.rate_num.max(1),
-        "rateDen": scene.rate_den.max(1),
-        "clips": clips,
-        "canvas": canvas,
-    });
-    let request: PreviewFrameRequest =
-        serde_json::from_value(request_value).map_err(|error| format!("预览请求无效：{error}"))?;
-    let pool = ReaderPool::new(64 * 1024 * 1024, 4);
-    let pixels = concat_export::preview_frame(&pool, &request)
-        .map_err(|error| format!("预览失败：{error}"))?;
-    Ok(PreviewFrame {
-        pixels,
-        width,
-        height,
-    })
+    ScenePreviewer::new().preview_frame(scene, scene_dir, frame, width, height)
 }
 
 /// 场景的图层 clip 列表（导出与预览共用）。
-fn scene_clips(scene: &Scene, scene_dir: &Path) -> Result<Vec<Value>, String> {
+fn scene_clips(
+    scene: &Scene,
+    scene_dir: &Path,
+    probes: &mut HashMap<PathBuf, (u32, u32)>,
+) -> Result<Vec<Value>, String> {
     let (width, height) = viewport_of(scene);
     let fps = scene.fps();
     let duration_frames = scene.duration_frames().ceil().max(1.0);
@@ -218,14 +267,14 @@ fn scene_clips(scene: &Scene, scene_dir: &Path) -> Result<Vec<Value>, String> {
 
     let mut clips: Vec<Value> = Vec::new();
     for (track, layer) in ordered.iter().enumerate() {
+        if !layer.visible {
+            continue; // hidden layers need no asset, and a missing one must not fail the scene
+        }
         let Some(asset) = layer.asset.as_ref() else {
             continue; // 图形图层需要素材化后才能进入导出
         };
         let path = resolve(scene_dir, asset);
-        let info = probe(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let video = info
-            .require_video()
-            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let (media_width, media_height) = media_size(&path, probes)?;
 
         let start_frame = layer.in_frame.max(0.0);
         let frames = if layer.duration_frames > 0.0 {
@@ -259,8 +308,8 @@ fn scene_clips(scene: &Scene, scene_dir: &Path) -> Result<Vec<Value>, String> {
             "hidden": !layer.visible,
             "muted": false,
             "volume": 1.0,
-            "mediaWidth": video.width,
-            "mediaHeight": video.height,
+            "mediaWidth": media_width,
+            "mediaHeight": media_height,
             "hasAudio": false,
             "mediaDuration": Value::Null,
             // keyed 属性是绝对值；base 必须是中性值，避免与关键帧叠加
@@ -279,6 +328,84 @@ fn scene_clips(scene: &Scene, scene_dir: &Path) -> Result<Vec<Value>, String> {
         return Err("场景中没有带素材的图层".to_owned());
     }
     Ok(clips)
+}
+
+/// 单帧预览的 clip 列表：每个可见图层按当前帧求一次 Transform，不做整条相机动画。
+fn scene_clips_at(
+    scene: &Scene,
+    scene_dir: &Path,
+    frame: f64,
+    probes: &mut HashMap<PathBuf, (u32, u32)>,
+) -> Result<Vec<Value>, String> {
+    let (width, height) = viewport_of(scene);
+    let fps = scene.fps();
+    // One frame past the last shown frame keeps a preview at the very end
+    // inside its clips rather than on a black gap.
+    let duration = (scene.duration_frames().ceil().max(1.0) + 1.0) / fps;
+    let plans: HashMap<String, LayerPlan> = scene
+        .plan_layers(frame, width, height)
+        .into_iter()
+        .map(|plan| (plan.layer_id.clone(), plan))
+        .collect();
+    let mut ordered: Vec<&SceneLayer> = scene.layers.iter().collect();
+    ordered.sort_by_key(|layer| layer.z);
+
+    let mut clips: Vec<Value> = Vec::new();
+    for (track, layer) in ordered.iter().enumerate() {
+        let Some(plan) = plans.get(&layer.id) else {
+            continue;
+        };
+        let Some(asset) = layer.asset.as_ref() else {
+            continue;
+        };
+        let path = resolve(scene_dir, asset);
+        let (media_width, media_height) = media_size(&path, probes)?;
+        clips.push(json!({
+            "path": path.to_string_lossy(),
+            "kind": "image",
+            "start": 0.0,
+            "duration": duration,
+            "sourceStart": 0.0,
+            "track": track,
+            "hidden": false,
+            "muted": false,
+            "volume": 1.0,
+            "mediaWidth": media_width,
+            "mediaHeight": media_height,
+            "hasAudio": false,
+            "mediaDuration": Value::Null,
+            // No animation here: the base values are this frame's transform.
+            "scale": plan.transform.scale,
+            "offsetX": plan.transform.offset_x,
+            "offsetY": plan.transform.offset_y,
+            "rotation": plan.transform.rotation,
+            "stretchX": plan.transform.stretch_x,
+            "stretchY": plan.transform.stretch_y,
+            "opacity": layer.opacity,
+            "animation": [],
+        }));
+    }
+
+    if clips.is_empty() {
+        return Err("场景中没有可见的素材图层".to_owned());
+    }
+    Ok(clips)
+}
+
+fn media_size(
+    path: &Path,
+    probes: &mut HashMap<PathBuf, (u32, u32)>,
+) -> Result<(u32, u32), String> {
+    if let Some(size) = probes.get(path) {
+        return Ok(*size);
+    }
+    let info = probe(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let video = info
+        .require_video()
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let size = (video.width, video.height);
+    probes.insert(path.to_path_buf(), size);
+    Ok(size)
 }
 
 fn canvas_of(scene: &Scene) -> [u8; 4] {
@@ -417,5 +544,54 @@ mod tests {
             "the background and characters are drawn"
         );
         assert_ne!(first.pixels, last.pixels, "the camera moved between frames");
+    }
+
+    #[test]
+    fn a_hidden_layer_with_a_missing_asset_does_not_fail_the_preview() {
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/camera_demo");
+        let mut scene = load_scene(&demo.join("scene.json")).expect("the demo scene");
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "hidden".into(),
+            name: "hidden".into(),
+            kind: concat_scene::LayerKind::Prop,
+            asset: Some("missing.png".into()),
+            transform: concat_scene::SceneTransform {
+                x: scene.world_width / 2.0,
+                y: scene.world_height / 2.0,
+                ..Default::default()
+            },
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: false,
+            z: 99,
+            expression: None,
+        });
+        let picture = ScenePreviewer::new()
+            .preview_frame(&scene, &demo, 0.0, 320, 180)
+            .expect("a hidden layer is not probed");
+        assert_eq!(picture.pixels.len(), 320 * 180 * 4);
+    }
+
+    #[test]
+    fn the_cached_previewer_matches_a_one_off_preview() {
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/camera_demo");
+        let scene = load_scene(&demo.join("scene.json")).expect("the demo scene");
+        let mut previewer = ScenePreviewer::new();
+        let cached = previewer
+            .preview_frame(&scene, &demo, 30.0, 960, 540)
+            .expect("cached frame");
+        let one_off = preview_frame_sized(&scene, &demo, 30.0, 960, 540).expect("one-off frame");
+        assert_eq!(cached.width, one_off.width);
+        assert_eq!(cached.height, one_off.height);
+        assert_eq!(
+            cached.pixels, one_off.pixels,
+            "the single-frame path draws the same frame as the export-shaped preview"
+        );
+
+        let later = previewer
+            .preview_frame(&scene, &demo, 89.0, 960, 540)
+            .expect("later frame");
+        assert_ne!(cached.pixels, later.pixels, "the camera moved");
     }
 }

@@ -1,11 +1,10 @@
-# Concat_camera 交接单（P1 状态）
+# Concat_camera 交接单（Phase 4 审查修复后）
 
 > 最后更新：2026-11-19
 > 仓库：`G:\Projects\Concat_camera`（fork of `jub0t/Concat`，AGPL-3.0-or-later）
 > 远程：`origin` = `xmp777/Concat_camera`，`upstream` = `jub0t/Concat`
-> 当前：**P0/P1 完成；Phase 2（跟随 + 组合运镜）与 Phase 3（工程持久化 + MCP 场景 CRUD）已闭环；MSVC 为正式基线**
-> **接手请先读 `docs/SOP.md`（标准作业程序）与 `docs/CAMERA_DESIGN.md`。**
-> 阶段交接索引：`docs/handovers/README.md`。
+> 当前：**P0/P1/Phase 2/3 完成；Phase 4 场景视口 + 编辑器 Scene 面板完成，子代理审查 P0/P1 已修复并回归通过；Windows-only，MSVC 基线**
+> **接手请先读 `docs/SOP.md` 与 `docs/CAMERA_DESIGN.md`；阶段详情见 `docs/handovers/2026-11-19-phase4-scene-pane.md`。**
 
 ---
 
@@ -88,12 +87,17 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
   - 启动截图 `docs/assets/scene_view_spike.png`。
 - **编辑器可停靠 Scene 面板**：
   - 新增 `PaneKind.scene`，接入 `seat.slint`/`pane-switcher.slint`/`dock.rs`；
-  - `panes/scene.rs`：打开/保存场景、帧滑杆、拖动相机（`host::spawn` 后台渲染，busy/pending 最新优先）；
-  - 拖动时按 480×270 渲染、松手回 960×540；滑杆改用 Concat 深色 `Rail`；
-  - **时间轴有片段时跟随原生 playhead**（场景帧 = playhead × fps），隐藏回退滑杆；时间轴为空时才显示滑杆；
-  - `publish.rs` 发布到 `SceneView` global；
-  - 菜单截图 `docs/assets/editor_scene_menu.png`，时间轴驱动截图 `docs/assets/editor_scene_timeline.png`；
-  - `cargo check -p concat`、完整 `cargo build -p concat`、239 个 lib 测试通过。
+  - `panes/scene.rs`：打开/保存场景、playhead 跟随、拖动相机（后台渲染，请求 id + generation 防过期回写）；
+  - 拖动/播放按场景宽高比适配并降采样，松手回 960×540；`ScenePreviewer` 复用 ReaderPool 与素材尺寸缓存；
+  - 时间轴长度 ≥ 场景长度时隐藏回退滑杆；否则显示 Concat 深色 `Rail`；
+  - `publish.rs` 只发布 `SceneView`；`on_scene!` 不重建 lane/clip；
+  - 菜单截图 `docs/assets/editor_scene_menu.png`，时间轴驱动截图 `docs/assets/editor_scene_timeline.png`。
+
+- **子代理审查修复（Phase 4）**：
+  - P0：拒绝把当前工程 `concat.json` 当场景打开/保存（防丢未保存剪辑）；MCP 场景工具加写入沙箱；
+  - P1：过期帧不回写、panic 不卡死、拖动坐标按 viewport/旋转/letterbox、播放跟随、组合运镜缓动、隐藏图层、显式场景时长、可取消导出、whisper 构建补丁幂等；
+  - 详情与未修项见 `docs/handovers/2026-11-19-phase4-scene-pane.md`。
+  - 最终计数：`concat-scene` 12、`concat-studio` 4、`concat-mcp` 10 lib + 5 e2e、`concat` 243 lib（以最终回归为准）。
 
 ---
 
@@ -102,12 +106,13 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 | 项 | 结果 |
 |---|---|
 | `cargo test -p concat-camera` | 6 passed |
-| `cargo test -p concat-scene` | 11 passed |
-| `cargo test -p concat-studio` | 2 passed（工程文档往返 + 单帧预览） |
+| `cargo test -p concat-scene` | 12 passed |
+| `cargo test -p concat-studio` | 4 passed（往返 + 预览 + 缓存预览一致性 + 隐藏图层） |
 | `cargo test -p concat-render` | 130 passed, 1 ignored |
-| `cargo test -p concat-mcp`（MSVC） | 10 lib + 5 e2e passed（含从零建场景并渲染） |
+| `cargo test -p concat-mcp`（MSVC） | 10 lib + 5 e2e passed（含沙箱拒绝） |
 | `cargo check -p concat`（MSVC） | 通过（whisper-rs 枚举修复后） |
-| `cargo test -p concat --lib` | 239 passed |
+| `cargo test -p concat --lib` | 243 passed |
+| 子代理审查 | 核心 Rust + 编辑器 UI 各 1 次；P0 全修，P1 见阶段交接 |
 | `cargo test -p concat --lib i18n::` | 7 passed（26 个 locale 均含新键） |
 | `cargo test -p concat --lib dock::` | 3 passed |
 | `cargo build -p concat`（MSVC） | 通过；Scene 预览由原生时间轴 playhead 驱动（`editor_scene_timeline.png`） |

@@ -435,6 +435,21 @@ pub fn spawn<T: Send + 'static>(
     interactive_lane().submit(what, Box::new(move || deliver(None, work(), then)));
 }
 
+/// [`spawn`] with the publish after `then` chosen by the caller: for work
+/// whose result touches one corner of the window, where a whole publish
+/// would be all cost.
+pub fn spawn_publishing<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    then: impl FnOnce(&mut Studio, &App, &Models, T) + Send + 'static,
+    publish: impl FnOnce(&Studio, &App, &Models) + Send + 'static,
+) {
+    let what = std::any::type_name_of_val(&work);
+    interactive_lane().submit(
+        what,
+        Box::new(move || deliver_then(None, work(), then, publish)),
+    );
+}
+
 /// [`spawn`] on the long lane: for work that takes seconds or minutes - a
 /// download, a template's copy of its media - and so must not hold a
 /// thread the monitor's frames need.

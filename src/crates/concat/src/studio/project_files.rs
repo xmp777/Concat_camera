@@ -155,6 +155,7 @@ impl Studio {
                 self.echo = None;
                 self.dirty = false;
                 self.project_name = info.name.clone();
+                self.project_folder = Some(std::path::PathBuf::from(&info.path));
                 self.export.name = projects::folder_name(&info.name);
                 self.selection.clear();
                 self.transition_selected = None;
@@ -421,6 +422,7 @@ impl Studio {
             self.host.open_projects.release(session.path());
         }
         self.session = None;
+        self.project_folder = None;
         // Whatever a worker still brings back for this project is dropped
         // at delivery; the sheets that were waiting on one stop waiting.
         crate::host::next_project_epoch();

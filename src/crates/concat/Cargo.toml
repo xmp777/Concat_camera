@@ -148,6 +148,7 @@ concat-core.workspace = true
 concat-media.workspace = true
 concat-project.workspace = true
 concat-export.workspace = true
+concat-camera.workspace = true
 concat-scene.workspace = true
 concat-studio.workspace = true
 # The compositor's limits the window's device is opened with

@@ -411,10 +411,17 @@ impl MoveSequence {
             }
             frame += step.duration_frames.max(1.0);
             pose = step.target_pose_in(&pose, scene);
+            // A boundary key's easing governs the segment that starts there:
+            // it belongs to the next step, not the one that just ended.
+            let easing = self
+                .steps
+                .get(index + 1)
+                .map(|next| next.easing)
+                .unwrap_or(step.easing);
             keys.push(CameraKey {
                 frame,
                 pose,
-                easing: step.easing,
+                easing,
             });
         }
         keys
@@ -446,6 +453,9 @@ pub struct Scene {
     /// 背景色 RGBA（0..1）
     #[serde(default = "default_background")]
     pub background: [f32; 4],
+    /// 场景显式时长（帧）；None 时由图层与相机推断
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_frames: Option<f64>,
     #[serde(default)]
     pub layers: Vec<SceneLayer>,
     pub camera: CameraTrack,
@@ -484,6 +494,7 @@ impl Scene {
             rate_num: 30,
             rate_den: 1,
             background: default_background(),
+            duration_frames: Some(90.0),
             layers: Vec::new(),
             camera: CameraTrack::from_key(0.0, pose),
         }
@@ -498,16 +509,21 @@ impl Scene {
         }
     }
 
-    /// 场景时长（帧）：取图层结束与摄像机最后一帧的最大值
+    /// 场景时长（帧）：取显式时长、图层结束与摄像机最后一帧的最大值
     pub fn duration_frames(&self) -> f64 {
         let mut end: f64 = self.camera.keys.last().map(|k| k.frame).unwrap_or(0.0) + 1.0;
         for layer in &self.layers {
             let layer_end = if layer.duration_frames > 0.0 {
                 layer.in_frame + layer.duration_frames
             } else {
-                layer.in_frame + 1.0
+                self.duration_frames
+                    .unwrap_or(layer.in_frame + 1.0)
+                    .max(layer.in_frame + 1.0)
             };
             end = end.max(layer_end);
+        }
+        if let Some(explicit) = self.duration_frames {
+            end = end.max(explicit);
         }
         end.max(1.0)
     }
@@ -882,6 +898,46 @@ mod tests {
 
         let end = scene.camera.pose_at(90.0);
         assert!((end.zoom - 2.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn baked_sequence_keeps_each_steps_own_easing() {
+        let scene = Scene::new("s", "场景", 8000.0, 4500.0, 1920, 1080);
+        let start = cam(4000.0, 2250.0, 1.0);
+        let sequence = MoveSequence {
+            steps: vec![
+                MovePreset {
+                    name: "右移".into(),
+                    kind: CameraMoveType::Pan {
+                        delta_x: 100.0,
+                        delta_y: 0.0,
+                    },
+                    duration_frames: 30.0,
+                    easing: Easing::LINEAR,
+                    ..Default::default()
+                },
+                MovePreset {
+                    name: "缓入推近".into(),
+                    kind: CameraMoveType::PushIn { factor: 2.0 },
+                    duration_frames: 30.0,
+                    easing: Easing::EASE_IN,
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let evaluated = sequence.pose_at_in(&start, &scene, 45.0);
+        let track = CameraTrack {
+            keys: sequence.bake_in(&start, &scene, 0.0),
+        };
+        let baked = track.pose_at(45.0);
+        assert!(
+            (evaluated.zoom - baked.zoom).abs() < 1e-9,
+            "the baked track must use step 1's easing after its boundary: {} vs {}",
+            evaluated.zoom,
+            baked.zoom
+        );
+        assert!((evaluated.x - baked.x).abs() < 1e-9);
     }
 
     #[test]

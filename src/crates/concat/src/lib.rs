@@ -841,6 +841,11 @@ fn start(project: Option<std::path::PathBuf>, smoke: Smoke) -> Result<(), slint:
     macro_rules! on_lanes {
         ($($handler:tt)*) => { handler!(publish_lanes, $($handler)*) };
     }
+    // The scene pane changes one corner of the window: do not rebuild the
+    // lane/clip models on every pointer move.
+    macro_rules! on_scene {
+        ($($handler:tt)*) => { handler!(publish_scene, $($handler)*) };
+    }
     // A dock change is remembered for the next launch, too.
     macro_rules! on_dock {
         ($($handler:tt)*) => { handler!(publish_dock_remembered, $($handler)*) };
@@ -1325,19 +1330,19 @@ fn start(project: Option<std::path::PathBuf>, smoke: Smoke) -> Result<(), slint:
     }));
 
     let scene = app.global::<SceneView>();
-    scene.on_open(on_window!(|state| {
+    scene.on_open(on_scene!(|state| {
         state.handle(Msg::Scene(SceneMsg::Open));
     }));
-    scene.on_seek(on_window!(|state, frame: f32| {
+    scene.on_seek(on_scene!(|state, frame: f32| {
         state.handle(Msg::Scene(SceneMsg::Seek(frame)));
     }));
-    scene.on_drag_camera(on_window!(|state, dx: f32, dy: f32| {
+    scene.on_drag_camera(on_scene!(|state, dx: f32, dy: f32| {
         state.handle(Msg::Scene(SceneMsg::Drag { dx, dy }));
     }));
-    scene.on_drag_ended(on_window!(|state| {
+    scene.on_drag_ended(on_scene!(|state| {
         state.handle(Msg::Scene(SceneMsg::DragEnded));
     }));
-    scene.on_save(on_window!(|state| {
+    scene.on_save(on_scene!(|state| {
         state.handle(Msg::Scene(SceneMsg::Save));
     }));
     editor.on_clip_dragged(on_lanes!(|state, seconds: f32, pixels: f32| {

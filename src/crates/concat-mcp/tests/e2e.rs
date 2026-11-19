@@ -532,6 +532,12 @@ fn an_agent_builds_and_renders_a_two_character_scene_headless() {
         }),
     );
     assert_eq!(created["structuredContent"]["scene"]["layers"], json!([]));
+    assert!(
+        created["structuredContent"]["scene"]["durationFrames"]
+            .as_f64()
+            .is_some_and(|frames| frames >= 89.0),
+        "a fresh scene has a usable length: {created}"
+    );
 
     for (id, kind, asset, x, z) in [
         ("bg", "background", "bg.png", 4000.0, 0),
@@ -609,5 +615,22 @@ fn an_agent_builds_and_renders_a_two_character_scene_headless() {
             .expect("valid JSON");
     assert!(document["concat"].is_string(), "a Concat document");
     assert_eq!(document["scene"]["id"], "双人对话");
+
+    // Scene writes are sandboxed like the project tools.
+    let outside_path = home
+        .parent()
+        .expect("the scratch has a parent")
+        .join("outside-scene.json");
+    let (_, outside) = agent.ask(
+        "tools/call",
+        json!({
+            "name": "scene_create",
+            "arguments": {
+                "scenePath": outside_path.to_string_lossy(),
+                "name": "nope",
+            },
+        }),
+    );
+    assert_eq!(outside["result"]["isError"], true, "{outside}");
     agent.end();
 }

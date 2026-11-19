@@ -43,6 +43,12 @@ pub trait Backend: Send {
     /// "headless", and where.
     fn describe(&self) -> Value;
 
+    /// The roots this backend may write under. Empty means it does not know,
+    /// and a caller that can write files must then be conservative.
+    fn writes_under(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// The session is over: stop what is running, and wait for it.
     fn finish(&mut self) {}
 }
@@ -164,6 +170,12 @@ impl Backend for Window {
     fn describe(&self) -> Value {
         serde_json::json!({ "mode": "window", "address": self.client.address().to_string() })
     }
+
+    fn writes_under(&self) -> Vec<PathBuf> {
+        // The window's roots are its own; the home folder is the conservative
+        // default the API itself uses on a desktop.
+        concat_server::home_root()
+    }
 }
 
 /// An API in this process.
@@ -212,6 +224,10 @@ impl Backend for Headless {
             .map(|root| root.display().to_string())
             .collect();
         serde_json::json!({ "mode": "headless", "writesUnder": roots })
+    }
+
+    fn writes_under(&self) -> Vec<PathBuf> {
+        self.api.roots().to_vec()
     }
 
     fn finish(&mut self) {

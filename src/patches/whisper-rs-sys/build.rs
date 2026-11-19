@@ -151,7 +151,8 @@ fn main() {
         .map_err(|v| v.to_string())
         .unwrap();
 
-        let bindings = bindgen::Builder::default()
+        #[allow(unused_mut)]
+        let mut bindings = bindgen::Builder::default()
             .rust_edition(bindgen::RustEdition::Edition2021)
             .rust_target(package_msrv)
             .header("wrapper.h");
@@ -203,7 +204,9 @@ fn main() {
                      #[cfg(not(all(windows, not(target_env = \"gnu\"))))]\n\
                      pub type {alias} = ::std::os::raw::c_uint;"
                 );
-                patched = patched.replace(&unsigned, &signed);
+                if !patched.contains(&format!("pub type {alias} = i32;")) {
+                    patched = patched.replace(&unsigned, &signed);
+                }
             }
             if patched != original {
                 std::fs::write(&generated, patched).expect("Couldn't sign the enum types");

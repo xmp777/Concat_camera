@@ -1132,6 +1132,9 @@ pub struct Studio {
     /// and is not asked for again until its project is next closed.
     lengths: HashMap<String, Option<f64>>,
     pub project_name: String,
+    /// The open project's folder; `concat.json` in it is the manifest the
+    /// Scene pane must never overwrite.
+    pub project_folder: Option<std::path::PathBuf>,
 
     // ── the workspace ──
     pub dock: Dock,
@@ -3140,6 +3143,7 @@ impl Studio {
             posters_pending: HashSet::new(),
             lengths: HashMap::new(),
             project_name: t("common.untitledProject"),
+            project_folder: None,
             dock,
             dock_aside,
             compact: false,

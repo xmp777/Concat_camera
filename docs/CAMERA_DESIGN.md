@@ -94,13 +94,16 @@ P1 的无头路径已经绕过这一点：`concat-studio` 把相机运动逐帧�
 **编辑器内 Pane（已接线）**：新增 `PaneKind.scene`，可从任意面板的切换菜单或窗口右上角 "Add panel" 添加；
 Rust 侧 `panes/scene.rs` 负责打开/保存/拖动，`studio/publish.rs` 把图像与状态发布到 `SceneView` global。
 运行截图：`docs/assets/editor_scene_menu.png`（面板菜单）与 `docs/assets/editor_scene_timeline.png`（原生时间轴驱动预览）。
-编辑器的 `cargo check -p concat`、完整 `cargo build -p concat`、239 个 lib 测试在 MSVC 下通过。
+编辑器的 `cargo check -p concat`、完整 `cargo build -p concat`、243 个 lib 测试在 MSVC 下通过。
 
-时间轴：时间轴有片段时，Scene 预览跟随 Concat 原生 playhead（场景帧 = playhead 秒 × 场景 fps），面板不再显示回退滑杆；
-只有时间轴为空时才显示帧滑杆。拖动期间以 480×270 合成，松手后回到 960×540。
+时间轴：时间轴长度 ≥ 场景长度时，Scene 预览跟随 Concat 原生 playhead（场景帧 = playhead 秒 × 场景 fps），隐藏回退滑杆；
+场景比时间轴长时才显示滑杆。拖动期间按场景宽高比适配到 480×270，松手后回到 960×540。
 
-后续完善：把 Scene 加入默认工作区预设（当前不改默认布局，避免覆盖用户已保存布局）、面板内直接选择场景文件后的路径记忆、
-以及把场景预览与时间轴联动（当前按场景自身帧号）。
+子代理审查修复（P0/P1）：拒绝打开/保存当前工程 manifest；MCP 场景工具写入沙箱；请求 id + generation 防过期回写；
+`ScenePreviewer` 复用 ReaderPool/素材缓存；拖动按 viewport/旋转/letterbox 计算；播放跟随；组合运镜缓动；隐藏图层；
+显式场景时长；`scene_render` 可取消/报进度；whisper 构建补丁幂等。
+
+后续完善：把 Scene 做成时间轴片段（`scene_id` + 起止），再删除回退滑杆；Inspector Camera 参数区；Scene 路径/帧号持久化。
 
 ---
 

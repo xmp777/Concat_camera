@@ -13,6 +13,7 @@ export global SceneView {
     in-out property <image> frame;
     in-out property <float> frame-number: 0;
     in-out property <int> max-frame: 0;
+    in-out property <bool> has-scene: false;
     in-out property <bool> show-frame-slider: true;
     in-out property <string> status: "";
     callback open();
@@ -59,6 +60,7 @@ export component ScenePane inherits Pane {
                 }
                 Button {
                     text: I18n.t("scene.save");
+                    enabled: SceneView.has-scene;
                     clicked => { SceneView.save(); }
                 }
                 Text {
@@ -89,11 +91,33 @@ export component ScenePane inherits Pane {
                 property <length> last-x: -1px;
                 property <length> last-y: -1px;
 
+                // The image is drawn with image-fit: contain, so the picture
+                // is centred and may be letterboxed. Drags count only inside
+                // this rectangle, in fractions of the picture (not the pane).
+                property <length> picture-w: Math.max(1, SceneView.frame.width) * 1px;
+                property <length> picture-h: Math.max(1, SceneView.frame.height) * 1px;
+                property <float> fit: Math.min(touch.width / touch.picture-w, touch.height / touch.picture-h);
+                property <length> shown-w: touch.picture-w * touch.fit;
+                property <length> shown-h: touch.picture-h * touch.fit;
+                property <length> shown-x: (touch.width - touch.shown-w) / 2;
+                property <length> shown-y: (touch.height - touch.shown-h) / 2;
+
                 moved() => {
-                    if (touch.last-x >= 0px && touch.width > 0px && touch.height > 0px) {
+                    if (SceneView.has-scene
+                        && touch.last-x >= 0px
+                        && touch.shown-w > 0px
+                        && touch.shown-h > 0px
+                        && touch.mouse-x >= touch.shown-x
+                        && touch.mouse-x <= touch.shown-x + touch.shown-w
+                        && touch.mouse-y >= touch.shown-y
+                        && touch.mouse-y <= touch.shown-y + touch.shown-h
+                        && touch.last-x >= touch.shown-x
+                        && touch.last-x <= touch.shown-x + touch.shown-w
+                        && touch.last-y >= touch.shown-y
+                        && touch.last-y <= touch.shown-y + touch.shown-h) {
                         SceneView.drag-camera(
-                            (touch.mouse-x - touch.last-x) / touch.width,
-                            (touch.mouse-y - touch.last-y) / touch.height,
+                            (touch.mouse-x - touch.last-x) / touch.shown-w,
+                            (touch.mouse-y - touch.last-y) / touch.shown-h,
                         );
                     }
                     touch.last-x = touch.mouse-x;
@@ -139,12 +163,11 @@ export component ScenePane inherits Pane {
                         x: 10px;
                         width: parent.width - 20px;
                         y: (parent.height - self.height) / 2;
-                        value: SceneView.frame-number;
+                        value <=> SceneView.frame-number;
                         minimum: 0;
                         maximum: Math.max(1, SceneView.max-frame);
                         step: 1;
                         changed(value) => {
-                            SceneView.frame-number = value;
                             SceneView.seek(value);
                         }
                     }
