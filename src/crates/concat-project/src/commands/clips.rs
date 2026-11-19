@@ -1015,7 +1015,7 @@ fn clip_length(media: &MediaItem) -> f64 {
 /// The lowest track with nothing occupying `[start, start + duration)`.
 /// `None` when every lane is taken there: the caller opens a new one
 /// rather than covering a clip.
-fn first_free_track(timeline: &Timeline, start: f64, duration: f64) -> Option<String> {
+pub(super) fn first_free_track(timeline: &Timeline, start: f64, duration: f64) -> Option<String> {
     timeline
         .tracks
         .iter()
@@ -1024,7 +1024,7 @@ fn first_free_track(timeline: &Timeline, start: f64, duration: f64) -> Option<St
 }
 
 /// A new, empty lane at the top, for a clip with nowhere else to go.
-fn fresh_track(timeline: &mut Timeline, mint: &mut IdMint) -> String {
+pub(super) fn fresh_track(timeline: &mut Timeline, mint: &mut IdMint) -> String {
     let id = mint.next("t");
     timeline.tracks.push(Track {
         id: id.clone(),
@@ -1042,7 +1042,11 @@ fn fresh_track(timeline: &mut Timeline, mint: &mut IdMint) -> String {
 /// Captions and titles go through this so they sit over the video, not
 /// under it. The plain `first_free_track` still walks from the bottom,
 /// which is what a sound or a picture wants.
-fn first_free_track_above(timeline: &Timeline, start: f64, duration: f64) -> Option<String> {
+pub(super) fn first_free_track_above(
+    timeline: &Timeline,
+    start: f64,
+    duration: f64,
+) -> Option<String> {
     let end = start + duration;
     let occupied = |track_id: &str| {
         timeline.clips.iter().any(|clip| {

@@ -24,6 +24,7 @@ mod clips;
 pub use clips::{PlayheadSide, consolidation_clips, delete_to_playhead, why_not_merge};
 mod media;
 mod properties;
+mod scene;
 mod timelines;
 mod tracks;
 
@@ -455,6 +456,73 @@ pub enum Command {
         transition_id: String,
         /// What the lane calls it.
         name: String,
+    },
+    /// Places a 2D scene as a clip of its own: the project's scene -
+    /// layers and the virtual camera - played over the clip's span, the
+    /// frame on screen at a moment being the scene's frame at the
+    /// clip-local time. No media behind it; see [`ClipKind::Scene`].
+    ///
+    /// The scene carried is embedded into the document when the project
+    /// has none yet; when it holds one with the same id it is kept as is
+    /// (the clip plays it); a different id errs - one scene per document
+    /// until the `scenes` map the design reserves exists. The clip's
+    /// length is the scene's own, from its duration and rate.
+    AddSceneClip {
+        /// The lane to place it on. None picks a lane as `above` says, as
+        /// [`Command::AddTextClip`] does.
+        track_id: Option<String>,
+        /// See [`Command::AddTextClip::above`].
+        #[serde(default)]
+        above: bool,
+        /// Timeline position in seconds, floored at 0.
+        start: f64,
+        /// The scene the clip plays. Held out of the generated schema -
+        /// the scene types live behind `concat-scene`, whose schema
+        /// derive is not wired yet, and the MCP scene tools carry their
+        /// own hand-written ones.
+        #[cfg_attr(feature = "schema", schemars(skip))]
+        scene: concat_scene::Scene,
+        /// What the lane calls it; the scene's name when absent.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Puts (or moves) one key on the scene's camera track: the pose at
+    /// `frame` becomes the given fields, every field left `None` keeping
+    /// the pose the track already evaluates there. The viewport is never
+    /// keyed here - it belongs to the scene's output, not to a move - and
+    /// stays whatever the pose had.
+    ///
+    /// Undoable like any command: the whole-scene document field is what
+    /// the undo snapshot holds.
+    SetSceneCameraKey {
+        /// The scene frame to key, sub-frames allowed.
+        frame: f64,
+        /// The lens centre's world X; None keeps the evaluated pose's.
+        #[serde(default)]
+        x: Option<f64>,
+        /// The lens centre's world Y; None keeps the evaluated pose's.
+        #[serde(default)]
+        y: Option<f64>,
+        /// The zoom; None keeps the evaluated pose's.
+        #[serde(default)]
+        zoom: Option<f64>,
+        /// The tilt, radians clockwise; None keeps the evaluated pose's.
+        #[serde(default)]
+        rotation: Option<f64>,
+        /// How the pose rides from this key to the next. None keeps the
+        /// easing of the key already at `frame`, else rides linearly.
+        /// Held out of the generated schema for the same reason the
+        /// carried scene is; see [`Command::AddSceneClip::scene`].
+        #[cfg_attr(feature = "schema", schemars(skip))]
+        #[serde(default)]
+        easing: Option<concat_scene::Easing>,
+    },
+    /// Takes the camera key at `frame` off the scene's track, if there is
+    /// one there. Nothing else moves: a no-op when the track has no key
+    /// within a hair of the frame.
+    RemoveSceneCameraKey {
+        /// The scene frame of the key to remove.
+        frame: f64,
     },
     /// Gives a clip a speed curve, or takes it away. The source covered is
     /// held constant, as a speed change does, so the clip's timeline length
@@ -1034,6 +1102,16 @@ pub enum CommandError {
     /// A clip-placing command named a track no longer on the timeline.
     #[error("That track no longer exists.")]
     TrackGone,
+    /// A scene command found no scene in the project document, or one it
+    /// could not read.
+    #[error("This project has no scene to edit.")]
+    SceneGone,
+    /// [`Command::AddSceneClip`] carried a scene whose id differs from the
+    /// one the project already holds. One scene per document, for now: a
+    /// second scene needs the `scenes` map the design reserves, not a
+    /// second top-level field.
+    #[error("This project already holds a different scene.")]
+    SceneMismatch,
     /// A first-free-track placement found a timeline with no tracks at all.
     #[error("There are no tracks.")]
     NoTracks,
@@ -1315,6 +1393,25 @@ impl Command {
                 .into_iter()
                 .flatten()
                 .copied()),
+            Command::AddSceneClip { start, scene, .. } => {
+                bad([*start]) || scene.has_non_finite()
+            }
+            Command::SetSceneCameraKey {
+                frame,
+                x,
+                y,
+                zoom,
+                rotation,
+                easing,
+            } => {
+                bad([*frame])
+                    || bad(x.iter().copied())
+                    || bad(y.iter().copied())
+                    || bad(zoom.iter().copied())
+                    || bad(rotation.iter().copied())
+                    || easing.iter().any(|ease| bad([ease.x1, ease.y1, ease.x2, ease.y2]))
+            }
+            Command::RemoveSceneCameraKey { frame } => bad([*frame]),
             _ => false,
         }
     }
@@ -1391,6 +1488,9 @@ pub fn apply(
         | Command::MergeClips { .. }
         | Command::ConsolidateClips { .. }
         | Command::RemoveClips { .. }) => clips::apply(project, mint, command),
+        command @ (Command::AddSceneClip { .. }
+        | Command::SetSceneCameraKey { .. }
+        | Command::RemoveSceneCameraKey { .. }) => scene::apply(project, mint, command),
         command @ (Command::UpdateClip { .. }
         | Command::StyleTextRange { .. }
         | Command::ClearTextStyles { .. }

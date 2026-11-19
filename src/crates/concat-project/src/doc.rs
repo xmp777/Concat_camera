@@ -250,7 +250,8 @@ fn settle_clip(mut clip: Clip) -> Clip {
         | ClipKind::Layer
         | ClipKind::SoundLayer
         | ClipKind::Shape
-        | ClipKind::Transition => clip.media_id.clear(),
+        | ClipKind::Transition
+        | ClipKind::Scene => clip.media_id.clear(),
         ClipKind::Video | ClipKind::Audio | ClipKind::Image => {}
     }
     if clip.kind != ClipKind::Text {

@@ -91,6 +91,15 @@ pub enum ClipKind {
     /// ties a transition to the cut into one clip, it is placed, moved and
     /// trimmed like any clip.
     Transition,
+    /// A 2D scene placed as a clip of its own: the composite of the
+    /// project's [`Project::scene`] - layers and the virtual camera -
+    /// played over the clip's span, the frame on screen at a moment being
+    /// the scene's frame at the clip-local time. No media behind it; the
+    /// scene it shows is the one link in [`Clip::scene_id`]. The compositor
+    /// never sees one: expansion (see `concat-studio`) turns it into
+    /// picture clips with the camera's motion baked in before a frame is
+    /// planned, which is what keeps the camera out of the render path.
+    Scene,
 }
 
 impl ClipKind {
@@ -2833,6 +2842,12 @@ pub struct Clip {
     /// On a detached audio clip: the video clip the sound came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detached_from: Option<String>,
+    /// On a scene clip: the id of the [`Project::scene`] it plays. Every
+    /// other kind leaves it unset; a scene clip whose id matches nothing
+    /// in the project renders nothing (expansion skips it) rather than
+    /// falling back to some other scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_id: Option<String>,
     /// The transition on the cut into this clip, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "wire::maybe")]
@@ -2956,6 +2971,7 @@ impl Clip {
             audio_stream: None,
             muted: None,
             detached_from: None,
+            scene_id: None,
             transition_in: None,
             enhanced: None,
             text: None,

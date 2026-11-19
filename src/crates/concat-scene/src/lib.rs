@@ -532,6 +532,35 @@ impl Scene {
         self.layers.iter().find(|l| l.id == id)
     }
 
+    /// True when any number in the scene is NaN or infinite. What a command
+    /// carrier checks before it applies, mirroring `concat-project`'s
+    /// `has_non_finite`: JSON cannot spell one, but a caller in Rust can,
+    /// and one stored would poison every pose and transform it touched.
+    pub fn has_non_finite(&self) -> bool {
+        fn bad(values: impl IntoIterator<Item = f64>) -> bool {
+            values.into_iter().any(|value| !value.is_finite())
+        }
+        let camera_bad = self.camera.keys.iter().any(|key| {
+            bad([key.frame])
+                || bad([key.pose.x, key.pose.y, key.pose.zoom, key.pose.rotation])
+                || bad([key.easing.x1, key.easing.y1, key.easing.x2, key.easing.y2])
+        });
+        let layers_bad = self.layers.iter().any(|layer| {
+            bad([
+                layer.transform.x,
+                layer.transform.y,
+                layer.transform.scale,
+                layer.transform.rotation_deg,
+                layer.transform.stretch_x,
+                layer.transform.stretch_y,
+            ]) || bad([layer.in_frame, layer.duration_frames, layer.opacity])
+        });
+        camera_bad
+            || layers_bad
+            || bad([self.world_width, self.world_height])
+            || self.duration_frames.is_some_and(|value| bad([value]))
+    }
+
     /// 在 `start_frame` 处把相对运镜烘焙进摄像机轨道。
     ///
     /// 起点取轨道在该帧的当前机位；因此同一预设应用到不同机位会得到各自的结果。

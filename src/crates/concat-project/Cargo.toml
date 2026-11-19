@@ -9,6 +9,14 @@ description = "The edit itself: the project document, its operations, and undo. 
 [dependencies]
 # The speed curve's arithmetic lives with the engine's time map.
 concat-core.workspace = true
+# The scene commands (`SetSceneCameraKey` and friends) read and write the
+# project's top-level `scene` document field, which is a `concat-scene`
+# scene; the model itself stays a raw value, so nothing here needs the
+# crate's types except these arms. `concat-camera` comes with the pose
+# those arms build, which `concat-scene` holds behind its own dependency
+# without re-exporting.
+concat-camera.workspace = true
+concat-scene.workspace = true
 # `rc`: timelines and clips sit behind Arc so an undo snapshot shares what
 # a command did not touch; the document still reads and writes them plain.
 serde = { version = "1", features = ["derive", "rc"] }

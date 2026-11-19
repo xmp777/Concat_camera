@@ -1427,6 +1427,9 @@ fn kind_of(clip: &Clip) -> ClipKind {
         // Drawn as a layer is - a span over the lanes beneath it, named for
         // its package, with no picture of its own - in a colour of its own.
         model::ClipKind::Transition => ClipKind::Transition,
+        // A span with no picture of its own either - the picture is the
+        // scene's, rendered elsewhere - in a colour of its own.
+        model::ClipKind::Scene => ClipKind::Scene,
     }
 }
 
@@ -1733,6 +1736,8 @@ fn inspector_family(kind: model::ClipKind) -> u8 {
         model::ClipKind::Layer => 3,
         model::ClipKind::Audio | model::ClipKind::SoundLayer => 4,
         model::ClipKind::Transition => 5,
+        // A scene batch edits the scene's camera, nothing a media clip has.
+        model::ClipKind::Scene => 6,
     }
 }
 
@@ -1946,6 +1951,9 @@ fn command_kind(command: &Command) -> &'static str {
         | Command::AddClipsInSequence { .. } => "Add to timeline",
         Command::AddTextClip { .. } => "Add text",
         Command::AddShapeClip { .. } => "Add shape",
+        Command::AddSceneClip { .. } => "Add scene",
+        Command::SetSceneCameraKey { .. } => "Set camera key",
+        Command::RemoveSceneCameraKey { .. } => "Remove camera key",
         Command::AddLayerClip { sound: true, .. } => "Add audio effect layer",
         Command::AddLayerClip { .. } => "Add effect layer",
         Command::AddTransitionClip { .. } => "Add transition",

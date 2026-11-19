@@ -1387,7 +1387,9 @@ dependencies = [
 name = "concat-project"
 version = "0.2.12"
 dependencies = [
+ "concat-camera",
  "concat-core",
+ "concat-scene",
  "schemars",
  "serde",
  "serde_json",

@@ -38,6 +38,7 @@ global Paint {
             : kind == ClipKind.transition ? Theme.kind-transition
             : kind == ClipKind.shape ? Theme.kind-shape
             : kind == ClipKind.sound-layer ? Theme.kind-sound-layer
+            : kind == ClipKind.scene ? Theme.kind-scene
             : Theme.kind-video;
     }
     public pure function well(kind: ClipKind) -> color {
@@ -50,6 +51,7 @@ global Paint {
             : kind == ClipKind.transition ? Theme.kind-transition-well
             : kind == ClipKind.shape ? Theme.kind-shape-well
             : kind == ClipKind.sound-layer ? Theme.kind-sound-layer-well
+            : kind == ClipKind.scene ? Theme.kind-scene-well
             : Theme.kind-video-well;
     }
     /// The bars laid over the picture - a look, an effect, a grade, a
@@ -68,6 +70,7 @@ global Paint {
             : kind == ClipKind.transition ? Glyph.transition
             : kind == ClipKind.shape ? Glyph.shapes
             : kind == ClipKind.sound-layer ? Glyph.waveform
+            : kind == ClipKind.scene ? Glyph.frame
             : Glyph.film;
     }
 }

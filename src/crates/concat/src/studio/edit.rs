@@ -219,13 +219,15 @@ impl Studio {
                         model::ClipKind::Video | model::ClipKind::Image => LANE_LARGE,
                         model::ClipKind::Audio => LANE_MEDIUM,
                         // A title is its name strip alone; a layer has no
-                        // picture at all; a shape's name says what it is.
-                        // None needs a body's height.
+                        // picture at all; a shape's name says what it is; a
+                        // scene is a span over the lanes, its picture the
+                        // Scene pane's. None needs a body's height.
                         model::ClipKind::Text
                         | model::ClipKind::Layer
                         | model::ClipKind::SoundLayer
                         | model::ClipKind::Shape
-                        | model::ClipKind::Transition => LANE_SMALL,
+                        | model::ClipKind::Transition
+                        | model::ClipKind::Scene => LANE_SMALL,
                     })
                     .fold(0.0_f32, f32::max);
                 if tallest > 0.0 { tallest } else { LANE_MEDIUM }

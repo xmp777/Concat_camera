@@ -1,0 +1,395 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Jareer Abdullah and Concat contributors
+
+//! The scene commands: placing a scene on the timeline and keying its
+//! camera.
+//!
+//! A scene lives in the document's top-level `scene` field - a raw JSON
+//! value this crate round-trips but does not otherwise own (see
+//! `concat-studio`'s `SCENE_KEY`, the same key by the same name). These
+//! arms are the one place the value is parsed, edited and written back:
+//! a parse failure here is a [`CommandError`], not a document that fails
+//! to load, and the value an arm writes is the value it parsed, so
+//! nothing the reader tolerated is dropped on the way through.
+
+use std::sync::Arc;
+
+use concat_scene::Scene;
+
+use super::{Command, CommandError, IdMint, Outcome};
+use crate::model::{Clip, ClipKind, Project};
+
+/// The document key a scene lives under. `concat-studio` holds the same
+/// name as `SCENE_KEY`; two constants rather than a shared one, because
+/// the dependency runs the other way.
+const SCENE_KEY: &str = "scene";
+
+/// How close two camera-key frames must be to name the same key - the
+/// tolerance [`concat_scene::CameraTrack::add_key`] upserts within.
+const KEY_EPSILON: f64 = 1e-9;
+
+pub(super) fn apply(
+    project: &mut Project,
+    mint: &mut IdMint,
+    command: Command,
+) -> Result<Outcome, CommandError> {
+    match command {
+        Command::AddSceneClip {
+            track_id,
+            above,
+            start,
+            scene,
+            name,
+        } => {
+            let duration =
+                (scene.duration_frames() / scene.fps()).max(super::MIN_CLIP_DURATION);
+            // Embed the scene, or accept the one the document already
+            // holds when it is the same one. A different one errs: two
+            // scenes in one document is the `scenes` map's business, not
+            // a second top-level field's. This runs before the timeline
+            // is borrowed, so the two mutable borrows of `project` never
+            // overlap.
+            match read_scene(project) {
+                Ok(existing) if existing.id == scene.id => {}
+                Ok(_) => return Err(CommandError::SceneMismatch),
+                Err(CommandError::SceneGone) => {
+                    project.extra.insert(
+                        SCENE_KEY.into(),
+                        serde_json::to_value(&scene).map_err(|_| CommandError::SceneGone)?,
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+            let timeline = project.active_mut();
+            let track_id = match track_id {
+                Some(id) if timeline.track(&id).is_some() => id,
+                Some(_) => return Err(CommandError::TrackGone),
+                // Every lane above the video is taken: a new one at the
+                // top for the scene to land on.
+                None if above => super::clips::first_free_track_above(timeline, start, duration)
+                    .unwrap_or_else(|| super::clips::fresh_track(timeline, mint)),
+                None => super::clips::first_free_track(timeline, start, duration)
+                    .unwrap_or_else(|| super::clips::fresh_track(timeline, mint)),
+            };
+            let start = timeline.nearest_free_start(&track_id, start, duration, &[]);
+            let id = mint.next("c");
+            let mut clip = Clip::blank(
+                id.clone(),
+                track_id,
+                ClipKind::Scene,
+                name.unwrap_or_else(|| scene.name.clone()),
+                start,
+                duration,
+            );
+            clip.scene_id = Some(scene.id.clone());
+            timeline.clips.push(Arc::new(clip));
+            Ok(Outcome {
+                created_id: Some(id),
+                applied: true,
+            })
+        }
+        Command::SetSceneCameraKey {
+            frame,
+            x,
+            y,
+            zoom,
+            rotation,
+            easing,
+        } => {
+            let mut scene = read_scene(project)?;
+            // The pose the overrides land on: the key already at the
+            // frame when there is one - so keying zoom at a keyed frame
+            // keeps the x the key holds, not one interpolated to it -
+            // else the pose the track evaluates there.
+            let base = match scene
+                .camera
+                .keys
+                .iter()
+                .find(|key| (key.frame - frame).abs() < KEY_EPSILON)
+            {
+                Some(key) => key.pose,
+                None => scene.camera.pose_at(frame),
+            };
+            let pose = concat_camera::VirtualCamera {
+                x: x.unwrap_or(base.x),
+                y: y.unwrap_or(base.y),
+                zoom: zoom.unwrap_or(base.zoom),
+                rotation: rotation.unwrap_or(base.rotation),
+                ..base
+            };
+            let easing = easing
+                .or_else(|| {
+                    scene
+                        .camera
+                        .keys
+                        .iter()
+                        .find(|key| (key.frame - frame).abs() < KEY_EPSILON)
+                        .map(|key| key.easing)
+                })
+                .unwrap_or(concat_scene::Easing::LINEAR);
+            scene.camera.add_key(frame, pose, easing);
+            write_scene(project, &scene)
+        }
+        Command::RemoveSceneCameraKey { frame } => {
+            let mut scene = read_scene(project)?;
+            let before = scene.camera.keys.len();
+            scene.camera.keys.retain(|key| (key.frame - frame).abs() >= KEY_EPSILON);
+            if scene.camera.keys.len() == before {
+                return Ok(Outcome {
+                    created_id: None,
+                    applied: false,
+                });
+            }
+            write_scene(project, &scene)
+        }
+        _ => unreachable!("scene::apply routed a command that is not a scene command"),
+    }
+}
+
+/// The project's scene, parsed from the document. The raw value stays
+/// whatever it was: an arm that errors out has touched nothing.
+fn read_scene(project: &Project) -> Result<Scene, CommandError> {
+    let value = project
+        .extra
+        .get(SCENE_KEY)
+        .ok_or(CommandError::SceneGone)?;
+    serde_json::from_value(value.clone()).map_err(|_| CommandError::SceneGone)
+}
+
+/// Writes the scene back and reports whether the document changed. The
+/// comparison is on the JSON: a key written with the pose it already
+/// held counts as "nothing happened", or the undo history would record
+/// phantom edits.
+fn write_scene(project: &mut Project, scene: &Scene) -> Result<Outcome, CommandError> {
+    let value = serde_json::to_value(scene).map_err(|_| CommandError::SceneGone)?;
+    let changed = project
+        .extra
+        .get(SCENE_KEY)
+        .is_none_or(|previous| *previous != value);
+    if changed {
+        project.extra.insert(SCENE_KEY.into(), value);
+    }
+    Ok(Outcome {
+        created_id: None,
+        applied: changed,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doc::DocumentSettings;
+    use crate::editor::Editor;
+    use serde_json::json;
+
+    fn settings() -> DocumentSettings {
+        DocumentSettings {
+            name: "Test".to_owned(),
+            width: 1920,
+            height: 1080,
+            rate_num: 30,
+            rate_den: 1,
+            canvas: [0, 0, 0, 255],
+        }
+    }
+
+    fn editor_with_scene() -> (Editor, String, concat_scene::Scene) {
+        let scene = Scene::new("sc1", "Test scene", 4000.0, 2250.0, 1920, 1080);
+        let mut editor = Editor::new();
+        let id = editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 0.0,
+                scene: scene.clone(),
+                name: None,
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        (editor, id, scene)
+    }
+
+    fn scene_of(project: &Project) -> Scene {
+        serde_json::from_value(project.extra.get(SCENE_KEY).cloned().unwrap()).unwrap()
+    }
+
+    fn key_zoom(frame: f64, zoom: Option<f64>) -> Command {
+        Command::SetSceneCameraKey {
+            frame,
+            x: None,
+            y: None,
+            zoom,
+            rotation: None,
+            easing: None,
+        }
+    }
+
+    /// A scene clip carries the scene into the document, names it after
+    /// the scene, and runs for the scene's own length; the whole thing
+    /// survives a save and a reopen.
+    #[test]
+    fn a_scene_clip_embeds_the_scene_places_itself_and_round_trips() {
+        let (editor, id, scene) = editor_with_scene();
+        let clip = editor.project().active().clip(&id).unwrap().clone();
+        assert_eq!(clip.kind, ClipKind::Scene);
+        assert_eq!(clip.scene_id.as_deref(), Some("sc1"));
+        assert_eq!(clip.name, "Test scene");
+        assert_eq!(clip.media_id, "");
+        // 90 frames at 30fps: three seconds.
+        assert!((clip.duration - 3.0).abs() < 1e-9);
+        assert_eq!(scene_of(editor.project()).id, "sc1");
+
+        let document = editor.to_document(&settings());
+        let restored = Editor::from_document(&document).expect("loads");
+        assert_eq!(restored.project(), editor.project());
+        let clip = restored.project().active().clip(&id).unwrap().clone();
+        assert_eq!(clip.scene_id.as_deref(), Some("sc1"));
+        assert_eq!(scene_of(restored.project()), scene);
+    }
+
+    /// The scene command crosses the API as JSON, the way an agent would
+    /// send it.
+    #[test]
+    fn an_add_scene_clip_command_parses_from_the_wire() {
+        let command: Command = serde_json::from_value(json!({
+            "op": "addSceneClip",
+            "trackId": null,
+            "above": true,
+            "start": 2.0,
+            "scene": {
+                "id": "sc9", "name": "Wire scene",
+                "world_width": 8000.0, "world_height": 4500.0,
+                "rate_num": 30, "rate_den": 1,
+                "duration_frames": 60.0,
+                "camera": { "keys": [] }
+            }
+        }))
+        .expect("the wire shape parses");
+        let mut editor = Editor::new();
+        let outcome = editor.apply(command).unwrap();
+        assert!(outcome.applied);
+        let clip = editor
+            .project()
+            .active()
+            .clip(outcome.created_id.as_deref().unwrap())
+            .unwrap();
+        // 60 frames at 30fps: two seconds.
+        assert!((clip.duration - 2.0).abs() < 1e-9);
+        assert_eq!(clip.scene_id.as_deref(), Some("sc9"));
+    }
+
+    /// Keying the camera is one undoable edit; the pose a key holds is
+    /// the evaluated one plus the overrides; and a key written with the
+    /// pose it already holds is not a step in the history.
+    #[test]
+    fn keying_the_scene_camera_is_an_undoable_edit() {
+        let (mut editor, _id, _scene) = editor_with_scene();
+        assert!(
+            editor
+                .apply(Command::SetSceneCameraKey {
+                    frame: 45.0,
+                    x: None,
+                    y: None,
+                    zoom: Some(2.0),
+                    rotation: None,
+                    easing: None,
+                })
+                .unwrap()
+                .applied
+        );
+        let scene = scene_of(editor.project());
+        let key = scene
+            .camera
+            .keys
+            .iter()
+            .find(|key| (key.frame - 45.0).abs() < KEY_EPSILON)
+            .expect("the key landed");
+        assert!((key.pose.zoom - 2.0).abs() < 1e-9);
+        // The x is what the track evaluated at frame 45 - the centre of
+        // the world, where the opening key of a `Scene::new` sits - not a
+        // default.
+        assert!((key.pose.x - 2000.0).abs() < 1e-9);
+
+        // Halfway between the opening key and this one, the zoom rides.
+        let mid = scene_of(editor.project()).camera.pose_at(22.5);
+        assert!(mid.zoom > 1.0 && mid.zoom < 2.0);
+
+        assert!(editor.undo());
+        assert!(scene_of(editor.project()).camera.keys.len() == 1);
+
+        // The key again is an edit; the same key a second time is not -
+        // the phantom edit the outcome contract guards against.
+        assert!(editor.apply(key_zoom(45.0, Some(2.0))).unwrap().applied);
+        assert!(
+            !editor
+                .apply(key_zoom(45.0, Some(2.0)))
+                .unwrap()
+                .applied,
+            "the same pose again is not a step"
+        );
+    }
+
+    /// A project holds one scene: a different one is refused, and the
+    /// refusal leaves the document as it was.
+    #[test]
+    fn a_second_scene_is_refused() {
+        let (mut editor, _id, scene) = editor_with_scene();
+        let other = Scene {
+            id: "sc2".into(),
+            ..scene.clone()
+        };
+        let error = editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 3.0,
+                scene: other,
+                name: None,
+            })
+            .unwrap_err();
+        assert!(matches!(error, CommandError::SceneMismatch));
+        assert_eq!(scene_of(editor.project()).id, "sc1");
+        // The refused add left no clip behind.
+        assert_eq!(editor.project().active().clips.len(), 1);
+    }
+
+    /// A camera key comes off at the frame it was put on, and taking one
+    /// off where none is changes nothing.
+    #[test]
+    fn removing_a_camera_key_and_a_missing_one() {
+        let (mut editor, _id, _scene) = editor_with_scene();
+        editor
+            .apply(Command::SetSceneCameraKey {
+                frame: 10.0,
+                x: None,
+                y: Some(100.0),
+                zoom: None,
+                rotation: None,
+                easing: None,
+            })
+            .unwrap();
+        assert!(
+            editor
+                .apply(Command::RemoveSceneCameraKey { frame: 10.0 })
+                .unwrap()
+                .applied
+        );
+        assert_eq!(scene_of(editor.project()).camera.keys.len(), 1);
+        assert!(
+            !editor
+                .apply(Command::RemoveSceneCameraKey { frame: 10.0 })
+                .unwrap()
+                .applied
+        );
+    }
+
+    /// A scene command on a project without a scene errs with the
+    /// sentence a user reads, rather than touching the document.
+    #[test]
+    fn a_scene_command_without_a_scene_is_refused() {
+        let mut editor = Editor::new();
+        let error = editor.apply(key_zoom(0.0, Some(2.0))).unwrap_err();
+        assert!(matches!(error, CommandError::SceneGone));
+    }
+}

@@ -120,12 +120,17 @@ pub fn flatten_timeline_in(
                 ModelClipKind::Audio => ClipKind::Audio,
                 ModelClipKind::Image => ClipKind::Image,
                 // Handled above; unreachable spelled as a skip so a new
-                // kind fails soft.
+                // kind fails soft. A scene clip never reaches here in the
+                // editor's own paths - expansion turns it into picture
+                // clips first (see `concat-studio`) - but a document read
+                // by a build without the expansion, or built by hand,
+                // skips rather than rendering nothing at all.
                 ModelClipKind::Text
                 | ModelClipKind::Layer
                 | ModelClipKind::SoundLayer
                 | ModelClipKind::Shape
-                | ModelClipKind::Transition => return None,
+                | ModelClipKind::Transition
+                | ModelClipKind::Scene => return None,
             };
             Some(ExportClip {
                 path: media.path.clone(),

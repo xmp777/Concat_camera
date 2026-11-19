@@ -52,6 +52,12 @@ pub fn chip_glyph(kind: ClipKind) -> &'static str {
             "M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z \
                             M3 14h7v7H3z M14 17.5a3.5 3.5 0 1 0 7 0a3.5 3.5 0 1 0 -7 0"
         }
+        // lucide/scan - the viewfinder, for a scene: a whole framed world
+        // of the project's own, not a treatment and not one more shot.
+        ClipKind::Scene => {
+            "M3 7V5a2 2 0 0 1 2-2h2 M17 3h2a2 2 0 0 1 2 2v2 M21 17v2a2 2 0 0 1-2 2h-2 \
+                            M7 21H5a2 2 0 0 1-2-2v-2"
+        }
     }
 }
 
