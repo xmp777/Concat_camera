@@ -5,6 +5,7 @@
 > 远程：`origin` = `xmp777/Concat_camera`，`upstream` = `jub0t/Concat`
 > 当前：**P0/P1 完成；Phase 2（跟随 + 组合运镜）与 Phase 3（工程持久化 + MCP 场景 CRUD）已闭环；MSVC 为正式基线**
 > **接手请先读 `docs/SOP.md`（标准作业程序）与 `docs/CAMERA_DESIGN.md`。**
+> 阶段交接索引：`docs/handovers/README.md`。
 
 ---
 

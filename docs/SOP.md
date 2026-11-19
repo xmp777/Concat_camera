@@ -243,11 +243,13 @@ git push origin main
 每次工作结束前，必须：
 
 1. `git status --porcelain` 干净或已提交。
-2. `cargo test -p concat-camera -p concat-scene -p concat-mcp` 通过。
+2. `cargo test -p concat-camera -p concat-scene -p concat-mcp` 通过；改了编辑器则加 `cargo test -p concat --lib`。
 3. `examples/camera_demo/out.mp4` 可重新生成（如需）。
-4. `docs/HANDOVER.md` 更新"当前进度/已知问题/下一步"。
-5. 若改了相机/场景数学，`docs/CAMERA_DESIGN.md` 同步更新。
-6. 提交信息使用 `feat|fix|docs|test|chore(scope): 摘要` 格式。
+4. `HANDOVER.md` 更新"当前进度/已知问题/下一步"。
+5. 在 `docs/handovers/` 写本阶段交接（模板见 `docs/handovers/TEMPLATE.md`）。
+6. 若改了相机/场景数学，`docs/CAMERA_DESIGN.md` 同步更新。
+7. 提交信息使用 `feat|fix|docs|test|chore(scope): 摘要` 格式。
+8. 推送 `origin/main`，确认 `git status -sb` 显示 `## main...origin/main` 且无未推送提交。
 
 ---
 
@@ -259,7 +261,7 @@ git push origin main
 | Phase 1 Headless 场景+相机 | ✅ 核心完成（`concat-scene`、`concat-studio`、示例 MP4） |
 | Phase 2 运镜 | ✅ 核心完成（相对/跟随/组合烘焙；曲线编辑器 UI 待 Phase 4） |
 | Phase 3 MCP | ✅ 核心完成（`scene_create/add_layer/camera_move/get/render` + 工程持久化 + e2e） |
-| Phase 4 Slint UI | 🟡 场景视口 Spike + 编辑器 `Scene` 面板已接线；完整工作区/交互验收待做 |
+| Phase 4 Slint UI | 🟡 场景视口 + 编辑器 `Scene` 面板；原生时间轴 playhead 已接入；Scene 片段/检查器待做 |
 | Phase 5 剪辑增强 | ⬜ 未开始 |
 | Phase 6 资产/ASR | ⬜ 未开始 |
 | Phase 7 网络/AI | ⬜ 未开始 |
@@ -278,3 +280,51 @@ git push origin main
 - **卡壳时**：查 §7 踩坑记录；仍不行就把错误全文和命令贴给用户，不要硬猜。
 
 > 本 SOP 是活文档：每完成一个阶段，更新 §10 与 §11。
+
+---
+
+## 12. 阶段交付流程（强制）
+
+每个阶段（Phase 或一个可独立验收的能力块）都按以下顺序走，**不跳步**：
+
+```
+实现（小步 + 测试）
+  ↓
+子代理只读审查（每阶段至少 1 个；核心数学 + UI/集成建议各 1 个）
+  ↓
+按 P0/P1/P2 修复；P0 必须修复，P1 修复或写明确豁免理由
+  ↓
+回归测试（对应 crate + 编辑器 lib 测试；UI 改动要实际启动截图）
+  ↓
+写阶段交接 docs/handovers/<日期>-<阶段>.md（模板见 TEMPLATE.md）
+  ↓
+更新 HANDOVER.md / CAMERA_DESIGN.md / SOP.md 的当前状态
+  ↓
+commit + push origin/main，确认 `## main...origin/main`
+```
+
+### 12.1 子代理审查要求
+
+- 使用 `subagent`（general / explore），明确写 **READ-ONLY，不要修改文件**。
+- 给足上下文：仓库路径、workspace 在 `src/`、相关 commit、文件清单、审查重点。
+- 要求输出：`P0/P1/P2 + file:line + 原因 + 修复建议 + 测试方法`；不确定项单独标注。
+- 审查后把结论（含未修复项与理由）写进阶段交接；P0 未清零不得进入下一阶段。
+
+### 12.2 阶段交接要求
+
+- 每阶段一个文件：`docs/handovers/YYYY-MM-DD-<stage>.md`，从 `TEMPLATE.md` 复制。
+- 必填：目标、交付内容、验证证据（命令 + 结果）、审查结论与修复、已知限制、下一阶段、Git 提交号。
+- 根目录 `HANDOVER.md` 只保留"当前状态 + 最新入口"，历史细节放阶段交接。
+- 每次推送后把 commit hash 写进交接的 Git 段。
+
+### 12.3 GitHub 同步要求
+
+- 每阶段结束必须 `git push origin main`；失败先重试（schannel 偶发握手失败）。
+- 推送后执行 `git status -sb`，必须无 `ahead`、无未提交改动。
+- 不 force-push main；上游同步用 `git fetch upstream && git merge --no-ff upstream/main`，合并后全量测试再推送。
+
+### 12.4 UI 阶段附加要求
+
+- 必须实际启动编辑器验证（不能只 `cargo check`）。
+- 截图存 `docs/assets/`，并在阶段交接中引用。
+- 涉及时间轴/检查器时，优先使用 Concat 原生数据流（playhead、Timeline、Command），不要新增平行状态。
