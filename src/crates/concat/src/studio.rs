@@ -45,6 +45,7 @@ use concat_project::model::{
 use concat_project::{Command, PlayheadSide};
 
 mod backdrop;
+mod beats;
 mod consolidate;
 use consolidate::MergeJob;
 mod masking;
@@ -440,6 +441,12 @@ pub const SHELF_KINDS: [PackageKind; 4] = [
     PackageKind::Transition,
 ];
 
+/// The sound packages Basic > Treatments switches on and off: a clip's
+/// loudness, its noise and its voice. They are switches there and nowhere
+/// a card, so the Library's sound shelf leaves them out; a sound layer,
+/// which has no Treatments page, still lists them in its own chain.
+pub const TREATMENTS: [&str; 3] = ["concat.loudness", "concat.denoise", "concat.enhance-voice"];
+
 /// `name` under the home directory, as a path string; empty when there is
 /// no home to speak of, and the form then asks for a folder outright.
 ///
@@ -743,6 +750,9 @@ pub struct Models {
     /// The looks made from tables, for the Adjustments page's LUTs shelf.
     pub catalogue_luts: Rc<VecModel<CatalogueEntryData>>,
     pub catalogue_audio: Rc<VecModel<CatalogueEntryData>>,
+    /// The Library's sound-effect shelf: the same, less the treatments,
+    /// which are switches under Basic > Treatments and not cards.
+    pub catalogue_audio_library: Rc<VecModel<CatalogueEntryData>>,
     pub catalogue_transitions: Rc<VecModel<CatalogueEntryData>>,
     pub effect_groups: Rc<VecModel<SharedString>>,
     pub filter_groups: Rc<VecModel<SharedString>>,
@@ -852,6 +862,7 @@ impl Models {
             catalogue_filters: Rc::new(VecModel::default()),
             catalogue_luts: Rc::new(VecModel::default()),
             catalogue_audio: Rc::new(VecModel::default()),
+            catalogue_audio_library: Rc::new(VecModel::default()),
             catalogue_transitions: Rc::new(VecModel::default()),
             effect_groups: Rc::new(VecModel::default()),
             filter_groups: Rc::new(VecModel::default()),
@@ -1030,6 +1041,11 @@ pub struct Studio {
     pub media: crate::panes::media_bin::MediaBin,
     /// Decoded art by media id, and the ids a worker is decoding for.
     pub peaks: HashMap<String, Arc<Pyramid>>,
+    /// Each sound file's beats by media id, the ids being heard, and those
+    /// that could not be; see `studio::beats`.
+    pub beats: HashMap<String, Arc<concat_speech::beats::Beats>>,
+    pub beats_pending: HashSet<String>,
+    pub beats_failed: HashSet<String>,
     /// Filmstrips by media id: the picture, how many frames are in it, one
     /// frame's width and the strip's height, in the picture's own pixels.
     pub strips: HashMap<String, Strip>,
@@ -3078,6 +3094,9 @@ impl Studio {
             autosave: slint::Timer::default(),
             media: crate::panes::media_bin::MediaBin::default(),
             peaks: HashMap::new(),
+            beats: HashMap::new(),
+            beats_pending: HashSet::new(),
+            beats_failed: HashSet::new(),
             strips: HashMap::new(),
             windows: HashMap::new(),
             art_pending: HashSet::new(),
@@ -3402,6 +3421,36 @@ mod tests {
         // A thousandth of a second past the cut at 2 is that cut's frame.
         assert_eq!(walk(2.001, true), 3.0);
         assert_eq!(walk(2.001, false), 1.0);
+    }
+
+    /// The three treatments are packages the Treatments switches turn on,
+    /// so they must exist as sound packages; and they are switches, not
+    /// cards, so the Library's sound shelf leaves them out while the rest
+    /// of the sound library stays.
+    #[test]
+    fn the_treatments_are_switches_not_library_cards() {
+        use concat_effects::catalogue::Catalogue;
+        let audio: Vec<&str> = Catalogue::builtin()
+            .of_kind(super::SHELF_KINDS[2])
+            .map(|package| package.manifest.effect.id.as_str())
+            .collect();
+        for id in super::TREATMENTS {
+            assert!(audio.contains(&id), "{id} is a sound package");
+        }
+        let view = Default::default();
+        let (_, shelf) = super::shelves(
+            super::SHELF_KINDS[2],
+            &view,
+            &[],
+            &std::cell::RefCell::new(std::collections::HashMap::new()),
+            &std::collections::HashMap::new(),
+            |package| !super::TREATMENTS.contains(&package.manifest.effect.id.as_str()),
+        );
+        let ids: Vec<String> = shelf.iter().map(|entry| entry.id.to_string()).collect();
+        for id in super::TREATMENTS {
+            assert!(!ids.iter().any(|shown| shown == id), "{id} is not a card");
+        }
+        assert_eq!(ids.len(), audio.len() - super::TREATMENTS.len());
     }
 
     /// A text box's caret counts bytes and a run counts characters: an
