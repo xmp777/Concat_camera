@@ -119,6 +119,12 @@ cmd /c "call vcvars64 && cargo build -p concat-mcp"
 & .\target\debug\concat-cli.exe probe examples\camera_demo\out.mp4
 ```
 
+### Slint 场景视口 Spike
+```powershell
+# 打开示例场景（滑杆选帧、拖动画面移动相机、Save 写回）
+cargo run -p concat-scene-view -- examples/camera_demo/scene.json
+```
+
 ### MCP 手动验证（无 GUI）
 ```powershell
 # 用我们的 e2e 测试跑通 Agent 闭环
@@ -251,12 +257,12 @@ git push origin main
 | Phase 1 Headless 场景+相机 | ✅ 核心完成（`concat-scene`、`concat-studio`、示例 MP4） |
 | Phase 2 运镜 | ✅ 核心完成（相对/跟随/组合烘焙；曲线编辑器 UI 待 Phase 4） |
 | Phase 3 MCP | ✅ 核心完成（`scene_create/add_layer/camera_move/get/render` + 工程持久化 + e2e） |
-| Phase 4 Slint UI | ⬜ 未开始（需布局 Spike） |
+| Phase 4 Slint UI | 🟡 Spike 完成（`concat-scene-view` 独立窗口；编辑器内 Pane 待接线） |
 | Phase 5 剪辑增强 | ⬜ 未开始 |
 | Phase 6 资产/ASR | ⬜ 未开始 |
 | Phase 7 网络/AI | ⬜ 未开始 |
 
-**下一步建议**：Phase 4（Slint 视口 Spike + 场景面板 + 编辑器预览/导出接相机）→ 图形图层素材化 → 跟随逐帧解算/边界约束 → parallax。
+**下一步建议**：把 `concat-scene-view` 接成编辑器可停靠 Pane（`CAMERA_DESIGN.md` §1.6 清单）→ 编辑器预览/导出接相机 → 图形图层素材化 → 跟随逐帧解算/边界约束 → parallax。
 
 ---
 

@@ -1,0 +1,24 @@
+[package]
+name = "concat-scene-view"
+description = "Phase 4 spike: a Slint window showing a concat-scene frame with a draggable virtual camera"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+concat-scene.workspace = true
+concat-studio.workspace = true
+slint = { version = "1.18", default-features = false, features = [
+    "std",
+    "backend-default",
+    "renderer-software",
+    "compat-1-2",
+] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+[lints]
+workspace = true

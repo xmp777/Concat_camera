@@ -1420,6 +1420,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "concat-scene-view"
+version = "0.2.12"
+dependencies = [
+ "concat-scene",
+ "concat-studio",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
 name = "concat-server"
 version = "0.2.12"
 dependencies = [

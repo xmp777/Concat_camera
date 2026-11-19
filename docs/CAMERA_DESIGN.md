@@ -75,6 +75,26 @@
 P1 的无头路径已经绕过这一点：`concat-studio` 把相机运动逐帧烘焙进 `ExportClip` 的关键帧，再交给同一套
 `render_on` 合成/编码。编辑器内的实时相机预览与"打开工程导出"仍需后续把相机求值接进 `plan_frame` 调用点。
 
+### 1.6 Phase 4 Slint 视口 Spike（已落地，独立窗口）
+
+新增 `concat-scene-view`（`src/crates/concat-scene-view`）：
+
+- 打开裸 `scene.json` 或 Concat 工程文档（顶层 `scene`）；
+- 用 **`concat_studio::preview_frame_sized`** 渲染当前帧（内部调用 `concat_export::preview_frame`，
+  复用 Concat 的预览合成器；960×540，拖动时更轻）；
+- Slint `Image` 显示 RGBA（`SharedPixelBuffer<Rgba8Pixel>`，只在 UI 线程创建）；
+- 渲染在后台线程，最新请求优先；UI 线程不跑解码/合成；
+- 在图像上拖动 = 平移相机（屏幕增量 → 世界像素，按 zoom 反算），并在当前帧写一个绝对关键帧；
+- `Save` 调 `concat_studio::save_scene` 写回工程文档。
+
+验证：`cargo run -p concat-scene-view -- examples/camera_demo/scene.json`，启动截图
+`docs/assets/scene_view_spike.png`；`concat-studio` 单测 `preview_frame_uses_the_same_scene_projection_as_export`
+断言帧 0 与 89 的 RGBA 不同且尺寸为 1920×1080。
+
+**尚未做**：把它做成编辑器 `PaneKind` 的第四个可停靠视图（需要改 `pane-switcher.slint`、`seat.slint`、
+`dock.rs`、`panes/mod.rs`、`Studio::handle`、`publish.rs` 与 26 个 locale 文件）。Spike 已证明
+渲染、线程与图像上传路径可用，后续只做 UI 接线。
+
 ---
 
 ## 2. 坐标系统与数学约定（必须统一）
@@ -322,3 +342,6 @@ pub struct MoveSequence { pub steps: Vec<MovePreset> }
   Concat 工程文档（顶层 `scene`）双向读写，新增 `concat-studio save`。MCP 新增 `scene_create`/`scene_add_layer`/
   `scene_camera_move`/`scene_get`，并新增 e2e `an_agent_builds_and_renders_a_two_character_scene_headless`；
   `concat-mcp` 共 10 lib + 5 e2e 通过。
+- 2026-11-19（Phase 4 Spike）：新增 `concat-scene-view`（Slint 独立窗口，显示场景帧、拖动相机、保存）；
+  `concat-studio` 新增 `preview_frame`/`preview_frame_sized`（复用 Concat 预览合成器）与预览单测；
+  截图 `docs/assets/scene_view_spike.png`。编辑器内可停靠 Pane 的接线仍待做。

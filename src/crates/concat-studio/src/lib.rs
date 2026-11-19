@@ -7,8 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use concat_export::{ExportRequest, Reporter, render_on};
-use concat_media::probe;
+use concat_export::{ExportRequest, PreviewFrameRequest, Reporter, render_on};
+use concat_media::{ReaderPool, probe};
 use concat_scene::{LayerPlan, Scene, SceneLayer};
 use serde_json::{Value, json};
 
@@ -115,9 +115,104 @@ pub fn render_scene(
     progress: &mut dyn FnMut(i64, i64, &'static str),
 ) -> Result<(), String> {
     let (width, height) = viewport_of(scene);
+    let clips = scene_clips(scene, scene_dir)?;
+    let canvas = canvas_of(scene);
+
+    let request_value = json!({
+        "output": options.output.to_string_lossy(),
+        "width": width,
+        "height": height,
+        "rateNum": scene.rate_num,
+        "rateDen": scene.rate_den,
+        "crf": options.crf,
+        "preset": options.preset,
+        "codec": "h264",
+        "tenBit": false,
+        "rateMode": "vbr",
+        "bitrateKbps": 0,
+        "colorRange": "limited",
+        "colorSpace": "sdr",
+        "hdr": false,
+        "effectTimeOffset": 0.0,
+        "canvas": canvas,
+        "clips": clips,
+    });
+    let request: ExportRequest =
+        serde_json::from_value(request_value).map_err(|e| format!("导出请求无效：{e}"))?;
+
+    if let Some(parent) = options.output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建输出目录 {}：{e}", parent.display()))?;
+    }
+
+    let cancel = AtomicBool::new(false);
+    let reporter = Reporter {
+        progress,
+        cancel: &cancel,
+    };
+    render_on(&request, None, reporter).map_err(|e| format!("导出失败：{e}"))?;
+    Ok(())
+}
+
+/// 一帧预览：RGBA 像素与尺寸（相机已完成投影）。
+pub struct PreviewFrame {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// 用 Concat 自己的预览合成器渲染场景中的一帧（CPU RGBA）。
+///
+/// 与导出共用同一份图层/相机求值；不经过编码，适合编辑器视口与拖动预览。
+pub fn preview_frame(scene: &Scene, scene_dir: &Path, frame: f64) -> Result<PreviewFrame, String> {
+    preview_frame_sized(scene, scene_dir, frame, 0, 0)
+}
+
+/// Like [`preview_frame`], at a chosen preview size; zero keeps the scene's
+/// output frame. A smaller frame is quicker to composite while dragging.
+pub fn preview_frame_sized(
+    scene: &Scene,
+    scene_dir: &Path,
+    frame: f64,
+    width: u32,
+    height: u32,
+) -> Result<PreviewFrame, String> {
+    let (scene_width, scene_height) = viewport_of(scene);
+    let (width, height) = if width == 0 || height == 0 {
+        (scene_width, scene_height)
+    } else {
+        (width, height)
+    };
+    let clips = scene_clips(scene, scene_dir)?;
+    let canvas = canvas_of(scene);
+    let request_value = json!({
+        "time": frame.max(0.0) / scene.fps(),
+        "width": width,
+        "height": height,
+        "rateNum": scene.rate_num.max(1),
+        "rateDen": scene.rate_den.max(1),
+        "clips": clips,
+        "canvas": canvas,
+    });
+    let request: PreviewFrameRequest =
+        serde_json::from_value(request_value).map_err(|error| format!("预览请求无效：{error}"))?;
+    let pool = ReaderPool::new(64 * 1024 * 1024, 4);
+    let pixels = concat_export::preview_frame(&pool, &request)
+        .map_err(|error| format!("预览失败：{error}"))?;
+    Ok(PreviewFrame {
+        pixels,
+        width,
+        height,
+    })
+}
+
+/// 场景的图层 clip 列表（导出与预览共用）。
+fn scene_clips(scene: &Scene, scene_dir: &Path) -> Result<Vec<Value>, String> {
+    let (width, height) = viewport_of(scene);
     let fps = scene.fps();
     let duration_frames = scene.duration_frames().ceil().max(1.0);
-
     let mut ordered: Vec<&SceneLayer> = scene.layers.iter().collect();
     ordered.sort_by_key(|layer| layer.z);
 
@@ -183,50 +278,16 @@ pub fn render_scene(
     if clips.is_empty() {
         return Err("场景中没有带素材的图层".to_owned());
     }
+    Ok(clips)
+}
 
-    let canvas = [
+fn canvas_of(scene: &Scene) -> [u8; 4] {
+    [
         (scene.background[0].clamp(0.0, 1.0) * 255.0).round() as u8,
         (scene.background[1].clamp(0.0, 1.0) * 255.0).round() as u8,
         (scene.background[2].clamp(0.0, 1.0) * 255.0).round() as u8,
         (scene.background[3].clamp(0.0, 1.0) * 255.0).round() as u8,
-    ];
-
-    let request_value = json!({
-        "output": options.output.to_string_lossy(),
-        "width": width,
-        "height": height,
-        "rateNum": scene.rate_num,
-        "rateDen": scene.rate_den,
-        "crf": options.crf,
-        "preset": options.preset,
-        "codec": "h264",
-        "tenBit": false,
-        "rateMode": "vbr",
-        "bitrateKbps": 0,
-        "colorRange": "limited",
-        "colorSpace": "sdr",
-        "hdr": false,
-        "effectTimeOffset": 0.0,
-        "canvas": canvas,
-        "clips": clips,
-    });
-    let request: ExportRequest =
-        serde_json::from_value(request_value).map_err(|e| format!("导出请求无效：{e}"))?;
-
-    if let Some(parent) = options.output.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("无法创建输出目录 {}：{e}", parent.display()))?;
-    }
-
-    let cancel = AtomicBool::new(false);
-    let reporter = Reporter {
-        progress,
-        cancel: &cancel,
-    };
-    render_on(&request, None, reporter).map_err(|e| format!("导出失败：{e}"))?;
-    Ok(())
+    ]
 }
 
 fn viewport_of(scene: &Scene) -> (u32, u32) {
@@ -335,5 +396,26 @@ mod tests {
         assert_eq!(load_scene(&path).expect("reads again"), scene);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn preview_frame_uses_the_same_scene_projection_as_export() {
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../examples/camera_demo");
+        let scene = load_scene(&demo.join("scene.json")).expect("the demo scene");
+        let first = preview_frame(&scene, &demo, 0.0).expect("frame 0");
+        let last = preview_frame(&scene, &demo, 89.0).expect("frame 89");
+
+        assert_eq!(first.width, 1920);
+        assert_eq!(first.height, 1080);
+        assert_eq!(
+            first.pixels.len(),
+            (first.width * first.height * 4) as usize
+        );
+        assert_eq!(last.pixels.len(), (last.width * last.height * 4) as usize);
+        assert!(
+            first.pixels.chunks_exact(4).any(|pixel| pixel[0] > 16),
+            "the background and characters are drawn"
+        );
+        assert_ne!(first.pixels, last.pixels, "the camera moved between frames");
     }
 }

@@ -75,6 +75,18 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
   - 新 e2e：`an_agent_builds_and_renders_a_two_character_scene_headless`（从零建双人场景 → 跟随运镜 → 640×360 MP4）。
 - **MSVC 下验证**：`concat-scene` 11、`concat-camera` 6、`concat-studio` 1、`concat-mcp` 10 lib + 5 e2e。
 
+### Phase 4 Spike（本次，2026-11-19）
+- **`concat-studio` 单帧预览**：
+  - `preview_frame` / `preview_frame_sized(scene, dir, frame, w, h)` 返回 RGBA；
+  - 内部复用 `concat_export::preview_frame`（Concat 自己的预览合成器），不自建渲染器；
+  - 单测断言帧 0 与 89 输出不同、1080p 尺寸正确。
+- **`concat-scene-view`（Slint 独立窗口）**：
+  - 打开裸场景或工程文档；Image 显示当前帧；滑杆选帧；
+  - 后台线程渲染、最新请求优先；UI 线程只上传 `SharedPixelBuffer`;
+  - 拖动画面平移相机并在当前帧写关键帧；Save 写回工程；
+  - 启动截图 `docs/assets/scene_view_spike.png`。
+- **未做**：把它接成编辑器可停靠 `PaneKind`（见 `CAMERA_DESIGN.md` §1.6 的接线清单）。
+
 ---
 
 ## 2. 验证记录（本机，2026-11-19）
@@ -83,9 +95,10 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 |---|---|
 | `cargo test -p concat-camera` | 6 passed |
 | `cargo test -p concat-scene` | 11 passed |
-| `cargo test -p concat-studio` | 1 passed（裸场景/工程文档往返） |
+| `cargo test -p concat-studio` | 2 passed（工程文档往返 + 单帧预览） |
 | `cargo test -p concat-render` | 130 passed, 1 ignored |
 | `cargo test -p concat-mcp`（MSVC） | 10 lib + 5 e2e passed（含从零建场景并渲染） |
+| `concat-scene-view examples/camera_demo/scene.json` | 窗口启动并显示帧 0（截图 `docs/assets/scene_view_spike.png`） |
 | `concat-cli probe examples/camera_demo/out.mp4` | 3.000s / h264 / 1920×1080 / 30fps |
 | `concat-studio save` + render 工程文档 | 3.000s / h264 / 1920×1080 / 30fps |
 | 示例截图 | `docs/assets/camera_demo_frame0.png`、`frame89.png` |
@@ -108,7 +121,8 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 src/crates/
 ├─ concat-camera/    # 投影/插值/运镜预设（P0）
 ├─ concat-scene/     # 2D 场景/图层/相机轨道/跟随/组合运镜（P1+）
-├─ concat-studio/    # Scene -> ExportClip -> render_on；裸场景/工程文档读写
+├─ concat-studio/    # Scene -> ExportClip -> render_on；裸场景/工程文档读写；单帧预览
+├─ concat-scene-view/ # Slint 独立视口 Spike（场景帧 + 拖动相机）
 ├─ concat-mcp/       # MCP：scene_create/add_layer/camera_move/get/render
 ├─ concat-render/    # FramePlan.camera 钩子
 ├─ concat-export/    # 合成/编码（复用）
@@ -129,15 +143,17 @@ docs/CAMERA_DESIGN.md # 设计/坐标/限制/方案
 - 场景已能写入 Concat 工程文档（顶层 `scene`），但编辑器内还没有场景面板；编辑器内的 `plan_frame` 仍未传入相机，场景片段也未接入时间轴。
 - 跟随只解析图层**静态**世界坐标；图层自身关键帧动画完成后，跟随需要逐帧重解目标点。
 - 相机预设没有可视化曲线编辑/管理 UI；`FocusTarget` 无目标时为绝对点。
-- Slint 视口（实时预览/编辑）尚未开始（Phase 4）。
+- Slint 视口（实时预览/编辑）目前是**独立窗口 Spike**（`concat-scene-view`）；尚未成为编辑器内可停靠 Pane。
 - MCP 场景工具同步执行、无进度/取消；大场景渲染会阻塞该次调用。
 
 **下一步（建议）**
-1. **Phase 4 Slint 视口 Spike**：编辑器中央区显示场景帧（先 CPU 图像，后 wgpu 纹理），支持相机拖拽/推拉预览。
-2. 编辑器接入：场景面板 + 把 `plan_frame` 调用点（审计 8 处）统一到 `plan_frame_with_camera`，预览/导出共用相机求值。
-3. 图形图层：用 Concat 的 title/Shape 或生成 PNG 后进入同一管线。
-4. 跟随增强：图层关键帧动画完成后逐帧解算目标点；加世界边界/zoom 约束。
-5. 清理 stash 中的 parallax（正确公式 `(world-camera)*p` + 测试）。
+1. **把 `concat-scene-view` 接成编辑器 `PaneKind`**：按 `CAMERA_DESIGN.md` §1.6 的清单改 Slint/ Rust 注册点；
+   复用 `ScenePane::preview_frame_sized`，拖动防抖、预览用小尺寸。
+2. 编辑器接入相机导出：把 `plan_frame` 调用点（审计 8 处）统一到 `plan_frame_with_camera`，预览/导出共用相机求值。
+3. 场景面板：图层列表 + 时间范围 + 表情差分 + 打开/保存工程场景。
+4. 图形图层：用 Concat 的 title/Shape 或生成 PNG 后进入同一管线。
+5. 跟随增强：图层关键帧动画完成后逐帧解算目标点；加世界边界/zoom 约束。
+6. 清理 stash 中的 parallax（正确公式 `(world-camera)*p` + 测试）。
 
 ---
 
