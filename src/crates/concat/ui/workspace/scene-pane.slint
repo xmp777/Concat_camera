@@ -13,6 +13,7 @@ export global SceneView {
     in-out property <image> frame;
     in-out property <float> frame-number: 0;
     in-out property <int> max-frame: 0;
+    in-out property <bool> show-frame-slider: true;
     in-out property <string> status: "";
     callback open();
     callback seek(float);
@@ -113,7 +114,7 @@ export component ScenePane inherits Pane {
             }
         }
 
-        Rectangle {
+        if SceneView.show-frame-slider: Rectangle {
             height: 40px;
             HorizontalLayout {
                 padding-left: 8px;
@@ -125,21 +126,33 @@ export component ScenePane inherits Pane {
                     color: Theme.fg-muted;
                     vertical-alignment: center;
                 }
-                Rail {
-                    value: SceneView.frame-number;
-                    minimum: 0;
-                    maximum: Math.max(1, SceneView.max-frame);
-                    step: 1;
-                    changed(value) => {
-                        SceneView.frame-number = value;
-                        SceneView.seek(value);
-                    }
+                Rectangle {
                     horizontal-stretch: 1;
+                    min-width: 80px;
+                    height: 32px;
+                    border-radius: Theme.r-sm;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                    background: Theme.field;
+
+                    Rail {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        y: (parent.height - self.height) / 2;
+                        value: SceneView.frame-number;
+                        minimum: 0;
+                        maximum: Math.max(1, SceneView.max-frame);
+                        step: 1;
+                        changed(value) => {
+                            SceneView.frame-number = value;
+                            SceneView.seek(value);
+                        }
+                    }
                 }
                 Text {
-                    text: Math.round(SceneView.frame-number);
+                    text: Math.round(SceneView.frame-number) + " / " + SceneView.max-frame;
                     color: Theme.fg;
-                    width: 52px;
+                    width: 84px;
                     horizontal-alignment: right;
                     vertical-alignment: center;
                 }

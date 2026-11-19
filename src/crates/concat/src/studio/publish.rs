@@ -204,6 +204,9 @@ impl Studio {
         scene.set_frame_number(self.scene.frame);
         scene.set_max_frame(self.scene.max_frame);
         scene.set_status(self.scene.status.clone());
+        // A timeline with clips drives the scene's frame; an empty one cannot,
+        // so the pane's own slider is the way to walk the scene there.
+        scene.set_show_frame_slider(self.duration() <= 0.0);
     }
 
     /// The timeline and the readouts that follow it: what runs on every

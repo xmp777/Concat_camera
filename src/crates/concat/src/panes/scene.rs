@@ -87,7 +87,7 @@ impl Default for ScenePane {
 impl ScenePane {
     /// Applies one message. The studio is the rest of the window; while this
     /// runs the studio's copy of the pane is a blank it must not read.
-    pub fn update(&mut self, msg: SceneMsg, _studio: &mut Studio) {
+    pub fn update(&mut self, msg: SceneMsg, studio: &mut Studio) {
         match msg {
             SceneMsg::Open => {
                 host::pick_files_then(
@@ -100,7 +100,7 @@ impl ScenePane {
                     },
                 );
             }
-            SceneMsg::Opened(path) => self.open(path),
+            SceneMsg::Opened(path) => self.open(path, studio.playhead, studio.duration() > 0.0),
             SceneMsg::Seek(frame) => {
                 self.dragging = false;
                 self.frame = frame.max(0.0);
@@ -120,12 +120,18 @@ impl ScenePane {
         }
     }
 
-    fn open(&mut self, path: PathBuf) {
+    fn open(&mut self, path: PathBuf, playhead: f32, follow_timeline: bool) {
         self.dragging = false;
         match load_scene(&path) {
             Ok(scene) => {
                 self.max_frame = (scene.duration_frames().ceil() as i32 - 1).max(0);
-                self.frame = 0.0;
+                self.frame = if follow_timeline {
+                    (f64::from(playhead) * scene.fps())
+                        .round()
+                        .clamp(0.0, f64::from(self.max_frame)) as f32
+                } else {
+                    0.0
+                };
                 self.status = format!(
                     "{}  ·  {}×{}  ·  {} fps",
                     scene.name,
@@ -143,7 +149,7 @@ impl ScenePane {
                     dir,
                     scene: RwLock::new(scene),
                 }));
-                self.request(0.0);
+                self.request(self.frame);
             }
             Err(error) => self.status = error.into(),
         }
@@ -175,6 +181,22 @@ impl ScenePane {
             Ok(()) => format!("Saved {}", state.path.display()).into(),
             Err(error) => error.into(),
         };
+    }
+
+    /// Follow the editor's timeline playhead: the scene's frame is the playhead
+    /// time at the scene's own rate, clamped to its duration.
+    pub fn follow_playhead(&mut self, seconds: f32) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let fps = state.scene.read().expect("scene lock").fps();
+        let frame = (f64::from(seconds) * fps)
+            .round()
+            .clamp(0.0, f64::from(self.max_frame)) as f32;
+        if (frame - self.frame).abs() > 0.5 {
+            self.frame = frame;
+            self.request(frame);
+        }
     }
 
     /// Ask for a frame, keeping at most one request waiting.

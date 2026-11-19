@@ -322,6 +322,7 @@ impl Studio {
         // A phone's lanes move under a playhead held at their middle.
         self.lanes.recentre(self.playhead);
         self.host.playback.seek(f64::from(self.playhead));
+        self.scene.follow_playhead(self.playhead);
         self.request_preview();
     }
 

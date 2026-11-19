@@ -88,9 +88,10 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 - **编辑器可停靠 Scene 面板**：
   - 新增 `PaneKind.scene`，接入 `seat.slint`/`pane-switcher.slint`/`dock.rs`；
   - `panes/scene.rs`：打开/保存场景、帧滑杆、拖动相机（`host::spawn` 后台渲染，busy/pending 最新优先）；
-  - 拖动时按 480×270 渲染、松手回 960×540，滑杆改用 Concat 深色 `Rail`；
+  - 拖动时按 480×270 渲染、松手回 960×540；滑杆改用 Concat 深色 `Rail`；
+  - **时间轴有片段时跟随原生 playhead**（场景帧 = playhead × fps），隐藏回退滑杆；时间轴为空时才显示滑杆；
   - `publish.rs` 发布到 `SceneView` global；
-  - 菜单截图 `docs/assets/editor_scene_menu.png`，加载场景截图 `docs/assets/editor_scene_fixed.png`；
+  - 菜单截图 `docs/assets/editor_scene_menu.png`，时间轴驱动截图 `docs/assets/editor_scene_timeline.png`；
   - `cargo check -p concat`、完整 `cargo build -p concat`、239 个 lib 测试通过。
 
 ---
@@ -108,7 +109,7 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 | `cargo test -p concat --lib` | 239 passed |
 | `cargo test -p concat --lib i18n::` | 7 passed（26 个 locale 均含新键） |
 | `cargo test -p concat --lib dock::` | 3 passed |
-| `cargo build -p concat`（MSVC） | 通过；编辑器 Scene 面板加载示例场景（`editor_scene_fixed.png`） |
+| `cargo build -p concat`（MSVC） | 通过；Scene 预览由原生时间轴 playhead 驱动（`editor_scene_timeline.png`） |
 | `concat-scene-view examples/camera_demo/scene.json` | 窗口启动并显示帧 0（截图 `docs/assets/scene_view_spike.png`） |
 | `concat-cli probe examples/camera_demo/out.mp4` | 3.000s / h264 / 1920×1080 / 30fps |
 | `concat-studio save` + render 工程文档 | 3.000s / h264 / 1920×1080 / 30fps |
@@ -161,13 +162,14 @@ docs/CAMERA_DESIGN.md # 设计/坐标/限制/方案
 - MCP 场景工具同步执行、无进度/取消；大场景渲染会阻塞该次调用。
 
 **下一步（建议）**
-1. **人工验收 Scene 面板**：从 Add panel 添加 → Open 选 `examples/camera_demo/scene.json` → 滑杆/拖动/保存；
-   修交互细节（文件对话框、状态文案、拖动灵敏度）。
-2. 编辑器接入相机导出：把 `plan_frame` 调用点（审计 8 处）统一到 `plan_frame_with_camera`，预览/导出共用相机求值。
-3. 场景面板：图层列表 + 时间范围 + 表情差分 + 打开/保存工程场景；把 Scene 加入"场景编辑"工作区预设。
-4. 图形图层：用 Concat 的 title/Shape 或生成 PNG 后进入同一管线。
-5. 跟随增强：图层关键帧动画完成后逐帧解算目标点；加世界边界/zoom 约束。
-6. 清理 stash 中的 parallax（正确公式 `(world-camera)*p` + 测试）。
+1. **把 Scene 做成时间轴片段**：工程模型/命令增加 Scene 片段（`scene_id` + 起点/时长），时间轴 UI 显示，场景帧由片段本地时间决定；
+   完成后 Scene 面板完全由原生时间轴/片段驱动，删除回退滑杆。
+2. **检查器接入相机参数**：Camera 区（X / Y / Zoom / Rotation / 关键帧），与 Scene 片段/相机轨道双向编辑。
+3. 编辑器接入相机导出：把 `plan_frame` 调用点（审计 8 处）统一到 `plan_frame_with_camera`，预览/导出共用相机求值。
+4. 场景面板：图层列表 + 时间范围 + 表情差分；把 Scene 加入"场景编辑"工作区预设。
+5. 图形图层：用 Concat 的 title/Shape 或生成 PNG 后进入同一管线。
+6. 跟随增强：图层关键帧动画完成后逐帧解算目标点；加世界边界/zoom 约束。
+7. 清理 stash 中的 parallax（正确公式 `(world-camera)*p` + 测试）。
 
 ---
 
