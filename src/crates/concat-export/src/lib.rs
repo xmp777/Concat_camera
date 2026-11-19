@@ -2116,6 +2116,7 @@ fn render_picture(
                 ),
                 treatments: Vec::new(),
                 output: output_of(request.color_space),
+                camera: plan.camera,
             };
             let drawing = std::time::Instant::now();
             spent.seeking += drawing - seeking;
@@ -2959,6 +2960,7 @@ fn transition_stages(plan: &FramePlan, span: &TransitionSpan) -> (FramePlan, Fra
             layers,
             treatments: Vec::new(),
             output: plan.output,
+            camera: plan.camera,
         }
     };
     (stage(&span.to), stage(&span.from))
@@ -3046,6 +3048,7 @@ fn over_the_lane(
         layers,
         treatments: over,
         output: plan.output,
+        camera: plan.camera,
     })
 }
 
@@ -3393,6 +3396,7 @@ pub fn preview_sources_of(
         ),
         treatments: Vec::new(),
         output: plan.output,
+        camera: plan_at.camera,
     };
     // Every live treatment goes into the plan now, so a caller drawing the
     // plan itself has them.

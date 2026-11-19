@@ -7,6 +7,7 @@
 //! 目标输出画框（Viewport / Camera Space），并提供推拉摇移、相对运镜与关键帧缓动计算。
 
 use concat_core::animate::Ease;
+use concat_core::timeline::Transform;
 use serde::{Deserialize, Serialize};
 
 /// 虚拟摄像机位姿与视口参数
@@ -100,6 +101,46 @@ impl VirtualCamera {
 
         // 4. 恢复世界中心偏移
         (dx + self.x, dy + self.y)
+    }
+
+    /// 将图层在世界空间中的原始 Transform，经当前摄像机位姿变换为最终画框上的等效 Transform
+    ///
+    /// 这一变换允许现有的任何渲染管线（CPU/GPU）在无需感知摄像机底层细节的情况下，
+    /// 直接绘制出符合虚拟摄像机取景特写的画面。
+    pub fn project_transform(&self, world_tf: &Transform, frame_w: u32, frame_h: u32) -> Transform {
+        let fw = frame_w as f64;
+        let fh = frame_h as f64;
+
+        // 1. 图层在世界空间相对于坐标原点的像素偏移
+        let world_px_x = world_tf.offset_x * fw;
+        let world_px_y = world_tf.offset_y * fh;
+
+        // 2. 计算相对摄像机中心的位移
+        let dx = world_px_x - self.x;
+        let dy = world_px_y - self.y;
+
+        // 3. 摄像机倾角旋转（视野中物体反向旋转）与变焦缩放
+        let cos_r = (-self.rotation).cos();
+        let sin_r = (-self.rotation).sin();
+        let rx = (dx * cos_r - dy * sin_r) * self.zoom;
+        let ry = (dx * sin_r + dy * cos_r) * self.zoom;
+
+        // 4. 转换回归一化 offset
+        let final_offset_x = rx / fw;
+        let final_offset_y = ry / fh;
+
+        // 5. 综合缩放与旋转
+        let final_scale = world_tf.scale * self.zoom;
+        let final_rotation = world_tf.rotation - self.rotation.to_degrees();
+
+        Transform {
+            scale: final_scale,
+            offset_x: final_offset_x,
+            offset_y: final_offset_y,
+            rotation: final_rotation,
+            stretch_x: world_tf.stretch_x,
+            stretch_y: world_tf.stretch_y,
+        }
     }
 
     /// 在两个摄像机状态之间按进度与缓动曲线进行高精度插值
@@ -256,5 +297,47 @@ mod tests {
         // 验证贝塞尔插值中间帧
         let mid = camera.interpolate(&target, 0.5, Ease::LINEAR);
         assert!((mid.zoom - 1.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_project_transform_identity() {
+        let camera = VirtualCamera::new(1920, 1080);
+        let original_tf = Transform {
+            scale: 1.2,
+            offset_x: 0.1,
+            offset_y: -0.2,
+            rotation: 15.0,
+            stretch_x: 1.0,
+            stretch_y: 1.0,
+        };
+
+        let projected = camera.project_transform(&original_tf, 1920, 1080);
+        assert!((projected.scale - original_tf.scale).abs() < 1e-6);
+        assert!((projected.offset_x - original_tf.offset_x).abs() < 1e-6);
+        assert!((projected.offset_y - original_tf.offset_y).abs() < 1e-6);
+        assert!((projected.rotation - original_tf.rotation).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_project_transform_pan_and_zoom() {
+        let mut camera = VirtualCamera::new(1920, 1080);
+        camera.x = 192.0; // 摄像机向右移动 192 像素 (0.1 宽度)
+        camera.zoom = 2.0; // 变焦推近 2 倍
+
+        let actor_tf = Transform {
+            scale: 1.0,
+            offset_x: 0.2, // 角色在 +0.2 (即 +384 像素)
+            offset_y: 0.0,
+            rotation: 0.0,
+            stretch_x: 1.0,
+            stretch_y: 1.0,
+        };
+
+        let projected = camera.project_transform(&actor_tf, 1920, 1080);
+
+        // 缩放应翻倍为 2.0
+        assert!((projected.scale - 2.0).abs() < 1e-6);
+        // 角色相对摄像机距离为 384 - 192 = 192 像素；在 2.0 变焦下，视野中显示为 384 像素 (0.2 宽度)
+        assert!((projected.offset_x - 0.2).abs() < 1e-6);
     }
 }

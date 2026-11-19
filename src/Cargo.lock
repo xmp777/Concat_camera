@@ -1392,6 +1392,7 @@ name = "concat-render"
 version = "0.2.12"
 dependencies = [
  "ash",
+ "concat-camera",
  "concat-core",
  "concat-effects",
  "concat-log",

@@ -1173,6 +1173,7 @@ fn a_transition_kept_on_the_device_matches_the_read_back_one() {
         )],
         treatments: Vec::new(),
         output: concat_core::frame::Signal::Sdr,
+        camera: None,
     };
     let (from, to) = (plan([220, 30, 30, 255]), plan([30, 30, 220, 255]));
     let catalogue = concat_effects::Catalogue::builtin();
@@ -1228,6 +1229,7 @@ fn a_frame_drawn_before_is_not_uploaded_again() {
             layers: vec![PlannedLayer::picture(detached_clip(), Arc::clone(frame))],
             treatments: Vec::new(),
             output: concat_core::frame::Signal::Sdr,
+            camera: None,
         };
         gpu.render_texture(&plan).expect("draws");
     };
@@ -1269,6 +1271,7 @@ fn the_pool_stays_within_its_limits() {
             layers: vec![PlannedLayer::picture(detached_clip(), frame)],
             treatments: Vec::new(),
             output: concat_core::frame::Signal::Sdr,
+            camera: None,
         };
         gpu.render_texture(&plan).expect("draws");
     }

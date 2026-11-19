@@ -25,6 +25,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use concat_camera::VirtualCamera;
 use concat_core::frame::{Frame, Signal};
 use concat_core::mask::{MaskStack, MaskUniform, StackUniform};
 use concat_core::shader::ShaderPass;
@@ -785,6 +786,8 @@ pub struct FramePlan {
     /// timeline an HDR clip keeps its light above white as it uploads, and
     /// the resolve rolls the frame off for an SDR screen.
     pub output: Signal,
+    /// 虚拟摄像机：当前帧应用的取景位姿。`None` 表示传统剪辑模式（无摄像机变换）。
+    pub camera: Option<VirtualCamera>,
 }
 
 impl FramePlan {
@@ -798,6 +801,7 @@ impl FramePlan {
             layers: Vec::new(),
             treatments: Vec::new(),
             output: Signal::Sdr,
+            camera: None,
         }
     }
 
@@ -907,6 +911,19 @@ pub fn detached_clip() -> ClipId {
 /// playhead simply contributes nothing. Every layer comes back with no
 /// picture, no effects and no mask: those are the executor's to fill in.
 pub fn plan_frame(timeline: &Timeline, time: Rational) -> FramePlan {
+    plan_frame_with_camera(timeline, time, None)
+}
+
+/// Works out what is on screen at `time`, applying an optional virtual camera view transform.
+///
+/// When `camera` is `Some`, each layer's Transform is projected from world coordinates to
+/// the camera's viewport, enabling 2D cinematic camera moves (pan, zoom, tilt, track)
+/// directly in the existing render pipeline without modifying compositors.
+pub fn plan_frame_with_camera(
+    timeline: &Timeline,
+    time: Rational,
+    camera: Option<VirtualCamera>,
+) -> FramePlan {
     let mut layers = Vec::new();
 
     for (track, (track_id, lane)) in timeline.tracks().enumerate() {
@@ -923,6 +940,12 @@ pub fn plan_frame(timeline: &Timeline, time: Rational) -> FramePlan {
             continue;
         };
 
+        let base_transform = clip.transform_at(time);
+        let transform = match &camera {
+            Some(cam) => cam.project_transform(&base_transform, timeline.width, timeline.height),
+            None => base_transform,
+        };
+
         layers.push(PlannedLayer {
             clip: clip_id,
             clip_start: clip.start,
@@ -936,7 +959,7 @@ pub fn plan_frame(timeline: &Timeline, time: Rational) -> FramePlan {
             crop: Crop::NONE,
             flip_h: false,
             flip_v: false,
-            transform: clip.transform_at(time),
+            transform,
             effects: Vec::new(),
             mask: None,
             masks: clip.masks_at(time),
@@ -957,6 +980,7 @@ pub fn plan_frame(timeline: &Timeline, time: Rational) -> FramePlan {
         layers,
         treatments: Vec::new(),
         output: Signal::Sdr,
+        camera,
     }
 }
 
@@ -1211,5 +1235,25 @@ mod tests {
         assert!(wipe.keeps(0.1));
         assert!(!wipe.keeps(0.5));
         assert_eq!(Shading::of(&[]), Shading::NONE);
+    }
+
+    #[test]
+    fn plans_layers_with_virtual_camera_projection() {
+        let mut timeline = Timeline::new(1920, 1080, FrameRate::THIRTY);
+        let track = timeline.add_track(Track::new("V1", TrackKind::Video));
+        let clip = Clip::new(MediaRef::new("character.png"), seconds(0), seconds(5));
+        timeline.add_clip(track, clip).expect("track exists");
+
+        let mut camera = VirtualCamera::new(1920, 1080);
+        camera.x = 192.0; // 相机向右移动 192 像素
+        camera.zoom = 1.5; // 相机变焦 1.5x
+
+        let plan = plan_frame_with_camera(&timeline, seconds(1), Some(camera));
+        assert_eq!(plan.layers.len(), 1);
+        assert!((plan.layers[0].transform.scale - 1.5).abs() < 1e-6);
+        // 原本 offset_x 是 0，相机在 +192px (0.1)，物体相对相机位移是 -192px
+        // 经 1.5x 变焦后，屏幕像素位移为 -192 * 1.5 = -288px，对应归一化 offset 为 -288 / 1920 = -0.15
+        assert!((plan.layers[0].transform.offset_x - (-0.15)).abs() < 1e-6);
+        assert!(plan.camera.is_some());
     }
 }
