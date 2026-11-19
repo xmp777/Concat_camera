@@ -1446,6 +1446,9 @@ pub const ggml_log_level_GGML_LOG_LEVEL_INFO: ggml_log_level = 2;
 pub const ggml_log_level_GGML_LOG_LEVEL_WARN: ggml_log_level = 3;
 pub const ggml_log_level_GGML_LOG_LEVEL_ERROR: ggml_log_level = 4;
 pub const ggml_log_level_GGML_LOG_LEVEL_CONT: ggml_log_level = 5;
+#[cfg(all(windows, not(target_env = "gnu")))]
+pub type ggml_log_level = i32;
+#[cfg(not(all(windows, not(target_env = "gnu"))))]
 pub type ggml_log_level = ::std::os::raw::c_uint;
 pub const ggml_tensor_flag_GGML_TENSOR_FLAG_INPUT: ggml_tensor_flag = 1;
 pub const ggml_tensor_flag_GGML_TENSOR_FLAG_OUTPUT: ggml_tensor_flag = 2;
@@ -4996,6 +4999,12 @@ pub const whisper_gretype_WHISPER_GRETYPE_CHAR: whisper_gretype = 3;
 pub const whisper_gretype_WHISPER_GRETYPE_CHAR_NOT: whisper_gretype = 4;
 pub const whisper_gretype_WHISPER_GRETYPE_CHAR_RNG_UPPER: whisper_gretype = 5;
 pub const whisper_gretype_WHISPER_GRETYPE_CHAR_ALT: whisper_gretype = 6;
+// whisper.cpp declares `enum whisper_gretype` as a C `int`; bindgen chose
+// `c_uint` in the pregenerated bindings. whisper-rs 0.16 maps the constants
+// into `repr(i32)` on MSVC, so the generated type has to be signed there.
+#[cfg(all(windows, not(target_env = "gnu")))]
+pub type whisper_gretype = i32;
+#[cfg(not(all(windows, not(target_env = "gnu"))))]
 pub type whisper_gretype = ::std::os::raw::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

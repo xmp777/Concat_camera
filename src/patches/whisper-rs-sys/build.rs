@@ -151,7 +151,7 @@ fn main() {
         .map_err(|v| v.to_string())
         .unwrap();
 
-        let mut bindings = bindgen::Builder::default()
+        let bindings = bindgen::Builder::default()
             .rust_edition(bindgen::RustEdition::Edition2021)
             .rust_target(package_msrv)
             .header("wrapper.h");
@@ -186,6 +186,27 @@ fn main() {
                 // copy src/bindings.rs to OUT_DIR
                 std::fs::copy("src/bindings.rs", out.join("bindings.rs"))
                     .expect("Unable to copy bindings.rs");
+            }
+        }
+        // whisper.cpp's `enum whisper_gretype` is a C `int`, but bindgen
+        // emits `c_uint`; whisper-rs 0.16 maps the constants into a
+        // `repr(i32)` enum on MSVC. Sign the generated alias there.
+        let generated = PathBuf::from(env::var("OUT_DIR").unwrap()).join("bindings.rs");
+        if let Ok(text) = std::fs::read_to_string(&generated) {
+            let original = text.clone();
+            let mut patched = text;
+            for alias in ["whisper_gretype", "ggml_log_level"] {
+                let unsigned = format!("pub type {alias} = ::std::os::raw::c_uint;");
+                let signed = format!(
+                    "#[cfg(all(windows, not(target_env = \"gnu\")))]\n\
+                     pub type {alias} = i32;\n\
+                     #[cfg(not(all(windows, not(target_env = \"gnu\"))))]\n\
+                     pub type {alias} = ::std::os::raw::c_uint;"
+                );
+                patched = patched.replace(&unsigned, &signed);
+            }
+            if patched != original {
+                std::fs::write(&generated, patched).expect("Couldn't sign the enum types");
             }
         }
     };
