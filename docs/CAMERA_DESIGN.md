@@ -91,9 +91,12 @@ P1 的无头路径已经绕过这一点：`concat-studio` 把相机运动逐帧�
 `docs/assets/scene_view_spike.png`；`concat-studio` 单测 `preview_frame_uses_the_same_scene_projection_as_export`
 断言帧 0 与 89 的 RGBA 不同且尺寸为 1920×1080。
 
-**尚未做**：把它做成编辑器 `PaneKind` 的第四个可停靠视图（需要改 `pane-switcher.slint`、`seat.slint`、
-`dock.rs`、`panes/mod.rs`、`Studio::handle`、`publish.rs` 与 26 个 locale 文件）。Spike 已证明
-渲染、线程与图像上传路径可用，后续只做 UI 接线。
+**编辑器内 Pane（已接线）**：新增 `PaneKind.scene`，可从任意面板的切换菜单或窗口右上角 "Add panel" 添加；
+Rust 侧 `panes/scene.rs` 负责打开/保存/拖动，`studio/publish.rs` 把图像与状态发布到 `SceneView` global。
+运行截图（菜单）：`docs/assets/editor_scene_menu.png`。编辑器的 `cargo check -p concat`、i18n 与 dock 单测在 MSVC 下通过。
+
+后续完善：把 Scene 加入默认工作区预设（当前不改默认布局，避免覆盖用户已保存布局）、面板内直接选择场景文件后的路径记忆、
+以及把场景预览与时间轴联动（当前按场景自身帧号）。
 
 ---
 
@@ -307,12 +310,11 @@ pub struct MoveSequence { pub steps: Vec<MovePreset> }
 - **正式基线（2026-11-19 起）**：Rust 1.93.1 `x86_64-pc-windows-msvc` + VS Build Tools 2022（`vcvars64.bat`）。
   - 构建/测试前先 `call vcvars64.bat`，否则找不到 `link.exe`。
   - `src/` 已设置 `rustup override` 为 MSVC。
-  - 已验证：`concat-scene` / `concat-camera` / `concat-mcp`（含 5 个 e2e）在 MSVC 下通过。
+  - 已验证：`concat-scene` / `concat-camera` / `concat-mcp`（含 5 个 e2e）、`concat` 编辑器（`cargo check` 与完整 `cargo build`）在 MSVC 下通过。
 - **备用**：`x86_64-pc-windows-gnu`（复用 MSYS2 GCC；P0 阶段使用，仍可 `cargo +...-gnu` 临时构建）。
 - FFmpeg：本地 `deps/ffdl/ffmpeg-n8.1.3...win64-lgpl-shared-8.1`（`FFMPEG_DIR`；含 MSVC `.lib` 与 DLL）。
 - ONNX Runtime 1.28.0：`onnxruntime-win-x64-1.28.0`（`ORT_LIB_LOCATION`）。
-  - 注意本机 `onnxruntime.lib` 仅 2KB（MinGW 导入库）；当前 MSVC 构建未链接 ORT 符号所以通过。
-    若后续链接失败，从 `onnxruntime-1.28.0.nupkg` 取官方 `runtimes/win-x64/native/onnxruntime.lib`。
+  - `onnxruntime.lib` 2KB 是官方 DLL 导入库（与 nupkg 内文件哈希一致），不是 MinGW 误置；编辑器 MSVC 链接已通过。
 - Windows 自带 `C:\WINDOWS\SYSTEM32\onnxruntime.dll` 优先级高于 PATH：运行时把我们的 DLL 放 exe 同目录。
 - 环境脚本：`setup-env.ps1`（FFMPEG_DIR / ORT / LIBCLANG / PATH）；MSVC 另需 vcvars64。
 

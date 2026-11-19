@@ -85,7 +85,11 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
   - 后台线程渲染、最新请求优先；UI 线程只上传 `SharedPixelBuffer`;
   - 拖动画面平移相机并在当前帧写关键帧；Save 写回工程；
   - 启动截图 `docs/assets/scene_view_spike.png`。
-- **未做**：把它接成编辑器可停靠 `PaneKind`（见 `CAMERA_DESIGN.md` §1.6 的接线清单）。
+- **编辑器可停靠 Scene 面板**：
+  - 新增 `PaneKind.scene`，接入 `seat.slint`/`pane-switcher.slint`/`dock.rs`；
+  - `panes/scene.rs`：打开/保存场景、滑杆选帧、拖动相机（`host::spawn` 后台渲染，busy/pending 最新优先）；
+  - `publish.rs` 发布到 `SceneView` global；
+  - 菜单截图 `docs/assets/editor_scene_menu.png`；`cargo check -p concat`、i18n/dock 单测通过。
 
 ---
 
@@ -98,6 +102,9 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 | `cargo test -p concat-studio` | 2 passed（工程文档往返 + 单帧预览） |
 | `cargo test -p concat-render` | 130 passed, 1 ignored |
 | `cargo test -p concat-mcp`（MSVC） | 10 lib + 5 e2e passed（含从零建场景并渲染） |
+| `cargo check -p concat`（MSVC） | 通过（whisper-rs 枚举修复后） |
+| `cargo test -p concat --lib i18n::` | 7 passed（26 个 locale 均含新键） |
+| `cargo test -p concat --lib dock::` | 3 passed |
 | `concat-scene-view examples/camera_demo/scene.json` | 窗口启动并显示帧 0（截图 `docs/assets/scene_view_spike.png`） |
 | `concat-cli probe examples/camera_demo/out.mp4` | 3.000s / h264 / 1920×1080 / 30fps |
 | `concat-studio save` + render 工程文档 | 3.000s / h264 / 1920×1080 / 30fps |
@@ -108,10 +115,12 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 2. **相机单位**：`VirtualCamera.rotation` 弧度，`Transform.rotation` 度；投影时转换。
 3. **世界尺寸**：`concat-camera::project_transform` 假设世界=画框像素；`concat-scene` 采用世界像素 + 显式 `world_width/height`，plan 时归一化。
 4. **Windows 自带 `C:\WINDOWS\SYSTEM32\onnxruntime.dll`** 会被优先加载；调试/运行 MCP 时需把我们的 `onnxruntime.dll` 放在 exe 同目录（已复制到 `target/debug` 与 `deps`）。
-5. 本机 ONNX `onnxruntime.lib` 仅 2KB（MinGW 用）；MSVC 构建目前能过（未链接 ORT 符号），若未来链接失败，从 `onnxruntime-1.28.0.nupkg` 恢复官方 MSVC `.lib`。
+5. 编辑器完整 `cargo build -p concat` 已在 MSVC 下通过（含 ORT 链接）；ORT `.lib` 为官方 DLL 导入库，2KB 正常。
 6. MCP 的 `scene_render` 是同步调用（渲染期间阻塞该工具调用）；大场景应后续改为任务/进度通知。
 7. **场景工程格式**：`save_scene` 写 Concat 工程文档（顶层 `scene`）；`load_scene` 同时接受裸 Scene。读场景一律走 `load_scene`，不要直接 `serde_json::from_str::<Scene>`。
 8. **MCP 工具清单预算**：`schema::tests::the_tool_list_fits_an_agents_context` 上限 190KB；新增工具有意精简描述，避免把上下文撑爆。
+9. **whisper-rs 0.16 + MSVC**：bindgen 把 `whisper_gretype`/`ggml_log_level` 生成为 `c_uint`，whisper-rs 的 `repr(i32)` 枚举无法编译。`patches/whisper-rs-sys/build.rs` 在生成后把这两个别名改为 MSVC 下 `i32`；升级 whisper-rs 时复核。
+10. **ORT `.lib` 2KB 正常**：官方 nupkg 的 `onnxruntime.lib` 也是 2124 字节（DLL 导入库）；编辑器 MSVC 链接已通过。
 
 ---
 
@@ -143,14 +152,15 @@ docs/CAMERA_DESIGN.md # 设计/坐标/限制/方案
 - 场景已能写入 Concat 工程文档（顶层 `scene`），但编辑器内还没有场景面板；编辑器内的 `plan_frame` 仍未传入相机，场景片段也未接入时间轴。
 - 跟随只解析图层**静态**世界坐标；图层自身关键帧动画完成后，跟随需要逐帧重解目标点。
 - 相机预设没有可视化曲线编辑/管理 UI；`FocusTarget` 无目标时为绝对点。
-- Slint 视口（实时预览/编辑）目前是**独立窗口 Spike**（`concat-scene-view`）；尚未成为编辑器内可停靠 Pane。
+- Slint 场景视口：独立窗口 Spike 与编辑器可停靠 `Scene` 面板均已接线；面板的打开文件、拖动、保存路径已实现，
+  但尚未做完整的人工交互验收与默认工作区预设。
 - MCP 场景工具同步执行、无进度/取消；大场景渲染会阻塞该次调用。
 
 **下一步（建议）**
-1. **把 `concat-scene-view` 接成编辑器 `PaneKind`**：按 `CAMERA_DESIGN.md` §1.6 的清单改 Slint/ Rust 注册点；
-   复用 `ScenePane::preview_frame_sized`，拖动防抖、预览用小尺寸。
+1. **人工验收 Scene 面板**：从 Add panel 添加 → Open 选 `examples/camera_demo/scene.json` → 滑杆/拖动/保存；
+   修交互细节（文件对话框、状态文案、拖动灵敏度）。
 2. 编辑器接入相机导出：把 `plan_frame` 调用点（审计 8 处）统一到 `plan_frame_with_camera`，预览/导出共用相机求值。
-3. 场景面板：图层列表 + 时间范围 + 表情差分 + 打开/保存工程场景。
+3. 场景面板：图层列表 + 时间范围 + 表情差分 + 打开/保存工程场景；把 Scene 加入"场景编辑"工作区预设。
 4. 图形图层：用 Concat 的 title/Shape 或生成 PNG 后进入同一管线。
 5. 跟随增强：图层关键帧动画完成后逐帧解算目标点；加世界边界/zoom 约束。
 6. 清理 stash 中的 parallax（正确公式 `(world-camera)*p` + 测试）。

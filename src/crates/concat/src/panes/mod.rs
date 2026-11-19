@@ -22,6 +22,7 @@ pub mod monitor;
 pub mod pace;
 pub mod project;
 pub mod relink;
+pub mod scene;
 pub mod settings;
 pub mod sounds;
 pub mod speech;
@@ -52,6 +53,8 @@ pub enum Msg {
     Monitor(monitor::MonitorMsg),
     /// To the timeline's view.
     Timeline(timeline::TimelineMsg),
+    /// To the 2D scene pane.
+    Scene(scene::SceneMsg),
     /// To the voiceover take.
     Voiceover(voiceover::VoiceoverMsg),
     /// To the library's Audio page.
@@ -72,12 +75,14 @@ pub fn activity(msg: &Msg) -> Option<Activity> {
     use media_bin::MediaMsg;
     use monitor::MonitorMsg;
     use relink::RelinkMsg;
+    use scene::SceneMsg;
     use settings::SettingsMsg;
     use speech::SpeechMsg;
     use timeline::TimelineMsg;
 
     match msg {
-        Msg::Monitor(MonitorMsg::Frame(..) | MonitorMsg::Request | MonitorMsg::Refine)
+        Msg::Scene(SceneMsg::Seek(_) | SceneMsg::Drag { .. })
+        | Msg::Monitor(MonitorMsg::Frame(..) | MonitorMsg::Request | MonitorMsg::Refine)
         | Msg::Timeline(
             TimelineMsg::Hovered(_)
             | TimelineMsg::HoverEnded

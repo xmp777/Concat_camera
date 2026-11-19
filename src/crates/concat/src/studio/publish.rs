@@ -199,6 +199,11 @@ impl Studio {
     pub fn publish_frame(&self, app: &App) {
         app.global::<Editor>()
             .set_preview_frame(self.monitor.image.clone());
+        let scene = app.global::<crate::ui::SceneView>();
+        scene.set_frame(self.scene.image.clone());
+        scene.set_frame_number(self.scene.frame);
+        scene.set_max_frame(self.scene.max_frame);
+        scene.set_status(self.scene.status.clone());
     }
 
     /// The timeline and the readouts that follow it: what runs on every

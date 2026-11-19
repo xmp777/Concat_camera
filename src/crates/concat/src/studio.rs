@@ -1092,6 +1092,8 @@ pub struct Studio {
     pub clipboard: Vec<Held>,
     /// The monitor: its frame, and the requests for the next.
     pub monitor: crate::panes::monitor::MonitorPane,
+    /// The 2D scene view: a scene frame and its camera.
+    pub scene: crate::panes::scene::ScenePane,
 
     // ── the sheets and menus ──
     pub export: crate::panes::export::ExportPane,
@@ -3117,6 +3119,7 @@ impl Studio {
             hover_hush: slint::Timer::default(),
             clipboard: Vec::new(),
             monitor: crate::panes::monitor::MonitorPane::default(),
+            scene: crate::panes::scene::ScenePane::default(),
             export: Default::default(),
             settings: crate::panes::settings::SettingsPane::default(),
             relink: crate::panes::relink::RelinkPane::default(),

@@ -309,6 +309,7 @@ fn pane_name(kind: PaneKind) -> &'static str {
         PaneKind::Inspector => "inspector",
         PaneKind::Timeline => "timeline",
         PaneKind::Keyframes => "keyframes",
+        PaneKind::Scene => "scene",
     }
 }
 
@@ -319,6 +320,7 @@ fn pane_of(name: &str) -> Option<PaneKind> {
         "inspector" => PaneKind::Inspector,
         "timeline" => PaneKind::Timeline,
         "keyframes" => PaneKind::Keyframes,
+        "scene" => PaneKind::Scene,
         _ => return None,
     })
 }

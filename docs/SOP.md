@@ -220,6 +220,8 @@ git push origin main
 13. **Git push 401/SSL**：认证一次即可；若 SSL 握手失败，重试或 `GIT_SSL_NO_VERIFY=1` 临时绕过（仅本机调试）。
 14. **不要改上游大文件**：功能放新 crate；上游文件只加钩子。
 15. **不要 force-push main**。
+16. **MSVC 下 `whisper-rs` 0.16 枚举符号**：官方 bindgen 把 `whisper_gretype`/`ggml_log_level` 生成为 `c_uint`，而 whisper-rs 在 MSVC 用 `repr(i32)`。本地补丁在 `patches/whisper-rs-sys/build.rs` 生成后把这两个别名改成 MSVC 下 `i32`；升级 whisper-rs 时重新检查。
+17. **ORT `.lib` 只有 2KB 是正常的**：官方 nupkg 的 `runtimes/win-x64/native/onnxruntime.lib` 同为 2124 字节（DLL 导入库）。不要误判为 MinGW 库。
 
 ---
 
@@ -257,12 +259,12 @@ git push origin main
 | Phase 1 Headless 场景+相机 | ✅ 核心完成（`concat-scene`、`concat-studio`、示例 MP4） |
 | Phase 2 运镜 | ✅ 核心完成（相对/跟随/组合烘焙；曲线编辑器 UI 待 Phase 4） |
 | Phase 3 MCP | ✅ 核心完成（`scene_create/add_layer/camera_move/get/render` + 工程持久化 + e2e） |
-| Phase 4 Slint UI | 🟡 Spike 完成（`concat-scene-view` 独立窗口；编辑器内 Pane 待接线） |
+| Phase 4 Slint UI | 🟡 场景视口 Spike + 编辑器 `Scene` 面板已接线；完整工作区/交互验收待做 |
 | Phase 5 剪辑增强 | ⬜ 未开始 |
 | Phase 6 资产/ASR | ⬜ 未开始 |
 | Phase 7 网络/AI | ⬜ 未开始 |
 
-**下一步建议**：把 `concat-scene-view` 接成编辑器可停靠 Pane（`CAMERA_DESIGN.md` §1.6 清单）→ 编辑器预览/导出接相机 → 图形图层素材化 → 跟随逐帧解算/边界约束 → parallax。
+**下一步建议**：人工验收编辑器 `Scene` 面板（Add panel → Open → 滑杆/拖动/保存）→ 场景加入工作区预设 → 编辑器预览/导出接相机 → 图形图层素材化 → 跟随逐帧解算/边界约束 → parallax。
 
 ---
 

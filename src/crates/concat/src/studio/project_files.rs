@@ -565,6 +565,11 @@ impl Studio {
                 pane.update(msg, self);
                 self.monitor = pane;
             }
+            crate::panes::Msg::Scene(msg) => {
+                let mut pane = std::mem::take(&mut self.scene);
+                pane.update(msg, self);
+                self.scene = pane;
+            }
             crate::panes::Msg::Timeline(msg) => {
                 let mut pane = std::mem::take(&mut self.lanes);
                 pane.update(msg, self);

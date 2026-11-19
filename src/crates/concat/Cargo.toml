@@ -148,6 +148,8 @@ concat-core.workspace = true
 concat-media.workspace = true
 concat-project.workspace = true
 concat-export.workspace = true
+concat-scene.workspace = true
+concat-studio.workspace = true
 # The compositor's limits the window's device is opened with
 # (`gpu::MEMORY_BUDGET`); linked through the host already.
 concat-render = { workspace = true, features = ["gpu"] }

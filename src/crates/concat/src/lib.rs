@@ -115,6 +115,7 @@ use panes::media_bin::MediaMsg;
 use panes::monitor::MonitorMsg;
 use panes::project::ProjectMsg;
 use panes::relink::RelinkMsg;
+use panes::scene::SceneMsg;
 use panes::settings::SettingsMsg;
 use panes::sounds::SoundsMsg;
 use panes::speech::SpeechMsg;
@@ -1321,6 +1322,20 @@ fn start(project: Option<std::path::PathBuf>, smoke: Smoke) -> Result<(), slint:
     }));
     editor.on_save_frame(on_window!(|state| {
         state.save_frame_as();
+    }));
+
+    let scene = app.global::<SceneView>();
+    scene.on_open(on_window!(|state| {
+        state.handle(Msg::Scene(SceneMsg::Open));
+    }));
+    scene.on_seek(on_window!(|state, frame: f32| {
+        state.handle(Msg::Scene(SceneMsg::Seek(frame)));
+    }));
+    scene.on_drag_camera(on_window!(|state, dx: f32, dy: f32| {
+        state.handle(Msg::Scene(SceneMsg::Drag { dx, dy }));
+    }));
+    scene.on_save(on_window!(|state| {
+        state.handle(Msg::Scene(SceneMsg::Save));
     }));
     editor.on_clip_dragged(on_lanes!(|state, seconds: f32, pixels: f32| {
         state.clip_dragged(seconds, pixels);
