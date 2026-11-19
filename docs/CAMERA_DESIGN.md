@@ -247,11 +247,17 @@ pub struct MovePreset {
 
 ## 6. 工具链与平台
 
-- **P0**：Rust 1.93.1 `x86_64-pc-windows-gnu`（复用 MSYS2 GCC；本机无 VS Build Tools）。已验证全部 crate 编译/测试。
-- **P0 之后**：切换 **VS Build Tools + MSVC** 作为正式基线（与上游 CI 一致；ONNX Runtime 官方库为 MSVC 构建，GNU 属应急路径）。
-- FFmpeg：本地 `deps/ffdl/ffmpeg-n8.1.3...win64-lgpl-shared-8.1`（`FFMPEG_DIR`）；打包时按 LGPL 动态分发并附声明。
-- ONNX Runtime 1.28.0：`onnxruntime-win-x64-1.28.0`（`ORT_LIB_LOCATION`），仅 vision/upscale 路径需要。
-- 环境脚本：`setup-env.ps1`（FFMPEG_DIR / ORT / LIBCLANG / PATH）。
+- **正式基线（2026-11-19 起）**：Rust 1.93.1 `x86_64-pc-windows-msvc` + VS Build Tools 2022（`vcvars64.bat`）。
+  - 构建/测试前先 `call vcvars64.bat`，否则找不到 `link.exe`。
+  - `src/` 已设置 `rustup override` 为 MSVC。
+  - 已验证：`concat-scene` / `concat-camera` / `concat-mcp`（含 4 个 e2e）在 MSVC 下通过。
+- **备用**：`x86_64-pc-windows-gnu`（复用 MSYS2 GCC；P0 阶段使用，仍可 `cargo +...-gnu` 临时构建）。
+- FFmpeg：本地 `deps/ffdl/ffmpeg-n8.1.3...win64-lgpl-shared-8.1`（`FFMPEG_DIR`；含 MSVC `.lib` 与 DLL）。
+- ONNX Runtime 1.28.0：`onnxruntime-win-x64-1.28.0`（`ORT_LIB_LOCATION`）。
+  - 注意本机 `onnxruntime.lib` 仅 2KB（MinGW 导入库）；当前 MSVC 构建未链接 ORT 符号所以通过。
+    若后续链接失败，从 `onnxruntime-1.28.0.nupkg` 取官方 `runtimes/win-x64/native/onnxruntime.lib`。
+- Windows 自带 `C:\WINDOWS\SYSTEM32\onnxruntime.dll` 优先级高于 PATH：运行时把我们的 DLL 放 exe 同目录。
+- 环境脚本：`setup-env.ps1`（FFMPEG_DIR / ORT / LIBCLANG / PATH）；MSVC 另需 vcvars64。
 
 ---
 
