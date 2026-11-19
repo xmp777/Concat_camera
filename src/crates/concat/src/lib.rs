@@ -1334,6 +1334,9 @@ fn start(project: Option<std::path::PathBuf>, smoke: Smoke) -> Result<(), slint:
     scene.on_drag_camera(on_window!(|state, dx: f32, dy: f32| {
         state.handle(Msg::Scene(SceneMsg::Drag { dx, dy }));
     }));
+    scene.on_drag_ended(on_window!(|state| {
+        state.handle(Msg::Scene(SceneMsg::DragEnded));
+    }));
     scene.on_save(on_window!(|state| {
         state.handle(Msg::Scene(SceneMsg::Save));
     }));

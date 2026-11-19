@@ -1,9 +1,10 @@
 ﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 xmp777
 
-import { Button, Slider } from "std-widgets.slint";
+import { Button } from "std-widgets.slint";
 import { Pane, PaneHeader } from "pane.slint";
 import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
+import { Rail } from "../inspector/controls.slint";
 import { I18n } from "../i18n.slint";
 import { Theme } from "../theme/theme.slint";
 
@@ -16,6 +17,7 @@ export global SceneView {
     callback open();
     callback seek(float);
     callback drag-camera(float, float);
+    callback drag-ended();
     callback save();
 }
 
@@ -101,9 +103,11 @@ export component ScenePane inherits Pane {
                     if (event.kind == PointerEventKind.down) {
                         touch.last-x = touch.mouse-x;
                         touch.last-y = touch.mouse-y;
-                    } else if (event.kind == PointerEventKind.up) {
+                    } else if (event.kind == PointerEventKind.up
+                        || event.kind == PointerEventKind.cancel) {
                         touch.last-x = -1px;
                         touch.last-y = -1px;
+                        SceneView.drag-ended();
                     }
                 }
             }
@@ -115,17 +119,17 @@ export component ScenePane inherits Pane {
                 padding-left: 8px;
                 padding-right: 8px;
                 spacing: 8px;
-                alignment: center;
 
                 Text {
                     text: I18n.t("common.frame");
                     color: Theme.fg-muted;
                     vertical-alignment: center;
                 }
-                Slider {
-                    minimum: 0;
-                    maximum: SceneView.max-frame;
+                Rail {
                     value: SceneView.frame-number;
+                    minimum: 0;
+                    maximum: Math.max(1, SceneView.max-frame);
+                    step: 1;
                     changed(value) => {
                         SceneView.frame-number = value;
                         SceneView.seek(value);

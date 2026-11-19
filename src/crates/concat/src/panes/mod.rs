@@ -81,7 +81,7 @@ pub fn activity(msg: &Msg) -> Option<Activity> {
     use timeline::TimelineMsg;
 
     match msg {
-        Msg::Scene(SceneMsg::Seek(_) | SceneMsg::Drag { .. })
+        Msg::Scene(SceneMsg::Seek(_) | SceneMsg::Drag { .. } | SceneMsg::DragEnded)
         | Msg::Monitor(MonitorMsg::Frame(..) | MonitorMsg::Request | MonitorMsg::Refine)
         | Msg::Timeline(
             TimelineMsg::Hovered(_)

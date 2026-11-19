@@ -24,6 +24,11 @@ use crate::studio::Studio;
 /// judge a camera move. Export still uses the scene's own output frame.
 const PREVIEW_WIDTH: u32 = 960;
 const PREVIEW_HEIGHT: u32 = 540;
+/// While a drag is in flight the frame is drawn at a quarter of the preview:
+/// the pointer's moves stay ahead of the CPU compositor, and the full frame
+/// is drawn once when the drag ends.
+const DRAG_WIDTH: u32 = 480;
+const DRAG_HEIGHT: u32 = 270;
 
 /// Everything that can happen to the scene pane.
 #[derive(Clone, Debug)]
@@ -36,6 +41,8 @@ pub enum SceneMsg {
     Seek(f32),
     /// The picture was dragged, in fractions of the preview's width/height.
     Drag { dx: f32, dy: f32 },
+    /// The pointer was lifted: draw the frame at full preview size again.
+    DragEnded,
     /// The Save button.
     Save,
 }
@@ -58,6 +65,8 @@ pub struct ScenePane {
     state: Option<Arc<SceneState>>,
     busy: bool,
     pending: Option<f32>,
+    /// A drag is in flight: draw smaller until it ends.
+    dragging: bool,
 }
 
 impl Default for ScenePane {
@@ -70,6 +79,7 @@ impl Default for ScenePane {
             state: None,
             busy: false,
             pending: None,
+            dragging: false,
         }
     }
 }
@@ -92,15 +102,26 @@ impl ScenePane {
             }
             SceneMsg::Opened(path) => self.open(path),
             SceneMsg::Seek(frame) => {
+                self.dragging = false;
                 self.frame = frame.max(0.0);
                 self.request(self.frame);
             }
-            SceneMsg::Drag { dx, dy } => self.drag(dx, dy),
+            SceneMsg::Drag { dx, dy } => {
+                self.dragging = true;
+                self.drag(dx, dy);
+            }
+            SceneMsg::DragEnded => {
+                if self.dragging {
+                    self.dragging = false;
+                    self.request(self.frame);
+                }
+            }
             SceneMsg::Save => self.save(),
         }
     }
 
     fn open(&mut self, path: PathBuf) {
+        self.dragging = false;
         match load_scene(&path) {
             Ok(scene) => {
                 self.max_frame = (scene.duration_frames().ceil() as i32 - 1).max(0);
@@ -166,18 +187,15 @@ impl ScenePane {
             return;
         };
         self.busy = true;
+        let (width, height) = if self.dragging {
+            (DRAG_WIDTH, DRAG_HEIGHT)
+        } else {
+            (PREVIEW_WIDTH, PREVIEW_HEIGHT)
+        };
         let scene = state.scene.read().expect("scene lock").clone();
         let dir = state.dir.clone();
         host::spawn(
-            move || {
-                preview_frame_sized(
-                    &scene,
-                    &dir,
-                    f64::from(frame),
-                    PREVIEW_WIDTH,
-                    PREVIEW_HEIGHT,
-                )
-            },
+            move || preview_frame_sized(&scene, &dir, f64::from(frame), width, height),
             move |studio, _, _, result| {
                 let pane = &mut studio.scene;
                 pane.busy = false;

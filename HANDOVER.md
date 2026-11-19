@@ -87,9 +87,11 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
   - 启动截图 `docs/assets/scene_view_spike.png`。
 - **编辑器可停靠 Scene 面板**：
   - 新增 `PaneKind.scene`，接入 `seat.slint`/`pane-switcher.slint`/`dock.rs`；
-  - `panes/scene.rs`：打开/保存场景、滑杆选帧、拖动相机（`host::spawn` 后台渲染，busy/pending 最新优先）；
+  - `panes/scene.rs`：打开/保存场景、帧滑杆、拖动相机（`host::spawn` 后台渲染，busy/pending 最新优先）；
+  - 拖动时按 480×270 渲染、松手回 960×540，滑杆改用 Concat 深色 `Rail`；
   - `publish.rs` 发布到 `SceneView` global；
-  - 菜单截图 `docs/assets/editor_scene_menu.png`；`cargo check -p concat`、i18n/dock 单测通过。
+  - 菜单截图 `docs/assets/editor_scene_menu.png`，加载场景截图 `docs/assets/editor_scene_fixed.png`；
+  - `cargo check -p concat`、完整 `cargo build -p concat`、239 个 lib 测试通过。
 
 ---
 
@@ -103,8 +105,10 @@ cargo run -p concat-studio -- render examples/camera_demo/scene.json examples/ca
 | `cargo test -p concat-render` | 130 passed, 1 ignored |
 | `cargo test -p concat-mcp`（MSVC） | 10 lib + 5 e2e passed（含从零建场景并渲染） |
 | `cargo check -p concat`（MSVC） | 通过（whisper-rs 枚举修复后） |
+| `cargo test -p concat --lib` | 239 passed |
 | `cargo test -p concat --lib i18n::` | 7 passed（26 个 locale 均含新键） |
 | `cargo test -p concat --lib dock::` | 3 passed |
+| `cargo build -p concat`（MSVC） | 通过；编辑器 Scene 面板加载示例场景（`editor_scene_fixed.png`） |
 | `concat-scene-view examples/camera_demo/scene.json` | 窗口启动并显示帧 0（截图 `docs/assets/scene_view_spike.png`） |
 | `concat-cli probe examples/camera_demo/out.mp4` | 3.000s / h264 / 1920×1080 / 30fps |
 | `concat-studio save` + render 工程文档 | 3.000s / h264 / 1920×1080 / 30fps |

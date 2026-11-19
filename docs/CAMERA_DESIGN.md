@@ -93,7 +93,10 @@ P1 的无头路径已经绕过这一点：`concat-studio` 把相机运动逐帧�
 
 **编辑器内 Pane（已接线）**：新增 `PaneKind.scene`，可从任意面板的切换菜单或窗口右上角 "Add panel" 添加；
 Rust 侧 `panes/scene.rs` 负责打开/保存/拖动，`studio/publish.rs` 把图像与状态发布到 `SceneView` global。
-运行截图（菜单）：`docs/assets/editor_scene_menu.png`。编辑器的 `cargo check -p concat`、i18n 与 dock 单测在 MSVC 下通过。
+运行截图：`docs/assets/editor_scene_menu.png`（面板菜单）与 `docs/assets/editor_scene_fixed.png`（已加载示例场景）。
+编辑器的 `cargo check -p concat`、完整 `cargo build -p concat`、239 个 lib 测试在 MSVC 下通过。
+
+拖动性能：拖动期间以 480×270 合成，松手后回到 960×540；帧滑杆使用 Concat 自己的深色 `Rail` 控件。
 
 后续完善：把 Scene 加入默认工作区预设（当前不改默认布局，避免覆盖用户已保存布局）、面板内直接选择场景文件后的路径记忆、
 以及把场景预览与时间轴联动（当前按场景自身帧号）。
