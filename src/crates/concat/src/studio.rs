@@ -3099,16 +3099,6 @@ impl Studio {
         self.scene_synced_revision = self.revision;
     }
 
-    /// A sync asked from inside a scene-pane update, where the slot holds
-    /// the placeholder; honoured once `handle` puts the pane back.
-    pub(crate) fn queue_scene_sync(&mut self) {
-        if self.scene_slot_taken {
-            self.scene_sync_pending = true;
-        } else {
-            self.sync_scene_pane();
-        }
-    }
-
     /// The scene camera's gesture window: two edits more than a beat apart
     /// are two undo steps, the way an inspector knob's are. Call before
     /// every `apply_within` that carries a scene-camera command.

@@ -388,6 +388,8 @@ export component ConfigPane inherits Rectangle {
     /// The sections of the current tab, as the dropdown lists them.
     property <[string]> sections: root.heading == "Video"
             ? (root.is-shape ? ["Shape", "Basic", "Animate"] : ["Basic", "Enhance", "Adjust", "Animate"])
+        // A scene clip's one tab has one section - the camera itself.
+        : root.heading == "Camera" ? ["Camera"]
         // Audio's chain library is a page of its own, beside the level,
         // fades and treatments rather than under them, the way Video's
         // Adjust sits beside its Basic. Named apart from Video's "Basic"
@@ -411,6 +413,7 @@ export component ConfigPane inherits Rectangle {
         return root.heading == "Video"
             ? (root.is-shape ? [Glyph.shapes, Glyph.move, Glyph.circle-play]
                 : [Glyph.move, Glyph.wand, Glyph.sliders, Glyph.circle-play])
+        : root.heading == "Camera" ? [Glyph.frame]
         : root.heading == "Audio"
             ? (root.selected.batch-volume ? [Glyph.volume]
                 : root.is-sound-layer ? [Glyph.filter, Glyph.waveform]
@@ -424,7 +427,8 @@ export component ConfigPane inherits Rectangle {
     /// playback, so a click landed on a segment already gone.
     property <[string]> sections-shown;
     pure function section-labels() -> [string] {
-        return root.heading == "Video"
+        return root.heading == "Camera" ? [I18n.t("configPane.camera")]
+        : root.heading == "Video"
             ? (root.is-shape ? [I18n.t("shapePanel.shape"), I18n.t("configPane.basic"), I18n.t("motion.animate")]
                 : [I18n.t("configPane.basic"), I18n.t("common.enhance"), I18n.t("common.adjust"),
                     I18n.t("motion.animate")])
