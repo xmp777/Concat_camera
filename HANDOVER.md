@@ -4,6 +4,7 @@
 > 仓库：`G:\Projects\Concat_camera`（fork of `jub0t/Concat`，AGPL-3.0-or-later）
 > 远程：`origin` = `xmp777/Concat_camera`，`upstream` = `jub0t/Concat`
 > 当前：**P0 收尾完成并已推送；P1 能力闭环（concat-scene + 相对运镜 + MCP scene_render + MP4）已跑通；MSVC 为正式基线**
+> **接手请先读 `docs/SOP.md`（标准作业程序）与 `docs/CAMERA_DESIGN.md`。**
 
 ---
 
