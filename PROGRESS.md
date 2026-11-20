@@ -19,11 +19,10 @@
   - [x] 6.2 `scene_clips` 补烘 StretchX/Y（含测试双断言）
   - [x] 6.3 probes 缓存提升到 Session（`expand_project_scenes` 三参签名；三路调用点接入；取舍已记录）
 - [x] **上游同步**（2026-11-20）：合并 upstream 178eb64c（concat-doc 文档模型 + concat-sched 调度器 + corpus 测试），适配 host 新 submit API，合并后全量回归绿
-- [ ] ⚠️ **Phase 7：图形图层素材化——熔断停机（第 3 轮审查未过）**
-  - 已落地：ShapeData 模型 + materialize_shape 像素级正确 + e2e 全链路 + S1/W1/W2/W3/W4/W6/N3 修复（3 轮审查逐轮收敛，全部有测试）
-  - **卡点 N1【严重】**：`scene_add_layer` 用未消毒的 `layer.id` 构造形状 PNG 文件名 → `id = "..\..\evil"` 或绝对路径可穿越写根落盘（写盘先于校验、词法 strip_prefix 防不住 `..`）。探针实证于第 3 轮审查
-  - **审查员给出的通过路径**：① id 消毒（只留 `[A-Za-z0-9._-]`）或改纯 hash 命名；② 校验先于写盘（canonicalize 后比对）；③ 补拒绝性测试（恶意 id → 拒绝且磁盘无文件）。修掉 N1 即 [REVIEW_PASSED]，建议项无需开轮
-  - 下一步：修复 N1（约 30 分钟）→ 第 4 轮复审确认 → 收尾推送。**待用户确认是否继续**
+- [x] **Phase 7：图形图层素材化**（2026-11-21，熔断后经外部审计并入第 4 轮修复，全部收敛）
+  - [x] 7.1 ShapeData 模型 + materialize_shape 像素级正确（e2e：Agent 四工具调用 → MP4）
+  - [x] 7.2 三轮内部审查收敛 + 外部审计（DeepSeek）并入：N1 路径穿越（纯 hash 命名）、播放回写冻结、同 id 场景更新、轨插入位置、最后一帧 viewport 保护、cargo fmt 门禁、运行期产物 untrack
+  - [x] 7.3 熔断后恢复：外部审计与内部审查双通道清零严重项；全量回归绿（fmt check 干净）
 - [ ] Phase 8：多场景（工程 `scenes` map + 场景选择器 + 片段绑定）
 - [ ] Phase 9：跟随逐帧解算 + 场景片段 speed/裁剪语义
 
