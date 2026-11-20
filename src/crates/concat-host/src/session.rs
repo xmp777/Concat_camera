@@ -593,6 +593,7 @@ mod tests {
             name: "背景".into(),
             kind: concat_scene::LayerKind::Background,
             asset: Some("bg.png".into()),
+            shape: None,
             transform: concat_scene::SceneTransform {
                 x: 2000.0,
                 y: 1125.0,
@@ -610,6 +611,7 @@ mod tests {
             name: "主角".into(),
             kind: concat_scene::LayerKind::Character,
             asset: Some("hero.png".into()),
+            shape: None,
             transform: concat_scene::SceneTransform {
                 x: 2000.0,
                 y: 1125.0,

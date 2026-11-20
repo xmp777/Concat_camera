@@ -92,15 +92,113 @@ impl Default for SceneTransform {
     }
 }
 
+/// 图形种类（rect / ellipse / line）
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeKind {
+    /// 填充矩形
+    Rect,
+    /// 内切椭圆
+    Ellipse,
+    /// 水平线：`ShapeData::size` 的宽为线长，粗细取 `stroke_width`
+    Line,
+}
+
+/// 图形图层的形状定义：素材化（渲染为 PNG）的唯一事实源。
+///
+/// 颜色是 rgba 的 0..=1；`fill` 与 `stroke` 都可缺省——都缺的图形没有
+/// 东西可画，素材化时按空图处理。`size` 是形状自己的像素（世界像素与
+/// 相机投影由图层 transform 与 [`Scene::plan_layers`] 承担）。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapeData {
+    #[serde(default)]
+    pub kind: ShapeKind,
+    /// 形状像素宽
+    #[serde(default = "default_shape_width")]
+    pub width: f64,
+    /// 形状像素高；line 时粗细取 `stroke_width`
+    #[serde(default = "default_shape_height")]
+    pub height: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<[f32; 4]>,
+    /// 描边粗细（像素），向内描。camelCase 的 `strokeWidth` 也收——
+    /// MCP 的 schema 与手写 JSON 两种拼法都指同一个字段。
+    #[serde(default, alias = "strokeWidth")]
+    pub stroke_width: f64,
+}
+
+fn default_shape_width() -> f64 {
+    100.0
+}
+
+fn default_shape_height() -> f64 {
+    100.0
+}
+
+impl Default for ShapeData {
+    fn default() -> Self {
+        Self {
+            kind: ShapeKind::Rect,
+            width: 100.0,
+            height: 100.0,
+            fill: Some([1.0, 1.0, 1.0, 1.0]),
+            stroke: None,
+            stroke_width: 0.0,
+        }
+    }
+}
+
+impl ShapeData {
+    /// 内容指纹（素材化缓存的文件名成分）：只取决定像素的字段。文本
+    /// 形式刻意直白（Debug 枚举名 + 定点小数），稳定跨进程——调用方拿
+    /// 它做文件名，而不是自己再发明一份。
+    pub fn cache_key(&self) -> String {
+        fn rgba(c: Option<[f32; 4]>) -> String {
+            match c {
+                // 位模式级精度：.3 位小数会把 0.12375 与 0.12351 压成同
+                // 一个键（u8 量化其实不同），先到先得的缓存就把后者钉死
+                // 在前者的像素上。
+                Some([r, g, b, a]) => format!(
+                    "{:08x},{:08x},{:08x},{:08x}",
+                    r.to_bits(),
+                    g.to_bits(),
+                    b.to_bits(),
+                    a.to_bits()
+                ),
+                None => "none".into(),
+            }
+        }
+        format!(
+            "{:?}-{}x{}-f({})-s({})-w{}",
+            self.kind,
+            self.width,
+            self.height,
+            rgba(self.fill),
+            rgba(self.stroke),
+            self.stroke_width
+        )
+        // 颜色的指纹取 f32 的位模式级精度（rgba 里 .3 小数会碰撞），
+        // 见 rgba()。
+    }
+    }
+}
+
 /// 场景中的一个对象（背景/角色/道具/图形/图片）
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SceneLayer {
     pub id: String,
     pub name: String,
     pub kind: LayerKind,
-    /// 相对工程目录的素材路径；图形图层为 `None`
+    /// 相对工程目录的素材路径；图形图层为 `None`（形状走 [`SceneLayer::shape`]
+    /// 素材化）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
+    /// 图形定义；仅 `kind == Shape` 携带。素材化把这一份像素画出来，
+    /// JSON 里它仍是唯一事实源。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<ShapeData>,
     #[serde(default)]
     pub transform: SceneTransform,
     /// 入点（帧）
@@ -554,6 +652,9 @@ impl Scene {
                 layer.transform.stretch_x,
                 layer.transform.stretch_y,
             ]) || bad([layer.in_frame, layer.duration_frames, layer.opacity])
+                // 图形定义同样进命令载体：一个 NaN 的形状尺寸/描边会把
+                // 素材化画成一张毒图。
+                || layer.shape.iter().any(|shape| bad([shape.width, shape.height, shape.stroke_width]))
         });
         camera_bad
             || layers_bad
@@ -630,6 +731,7 @@ mod tests {
             name: "小樱".into(),
             kind: LayerKind::Character,
             asset: Some("assets/sakura.png".into()),
+            shape: None,
             transform: SceneTransform {
                 x: 3600.0,
                 y: 2250.0,
@@ -698,6 +800,7 @@ mod tests {
             name: "中心".into(),
             kind: LayerKind::Prop,
             asset: None,
+            shape: None,
             transform: SceneTransform {
                 x: 4000.0,
                 y: 2250.0,
@@ -735,6 +838,7 @@ mod tests {
             name: "A".into(),
             kind: LayerKind::Image,
             asset: Some("assets/a.png".into()),
+            shape: None,
             transform: SceneTransform::default(),
             in_frame: 50.0,
             duration_frames: 20.0,
@@ -769,6 +873,7 @@ mod tests {
             name: id.into(),
             kind: LayerKind::Character,
             asset: Some(format!("assets/{id}.png")),
+            shape: None,
             transform: SceneTransform {
                 x,
                 y,
@@ -986,5 +1091,52 @@ mod tests {
         let json = serde_json::to_string(&sequence).expect("serialises");
         let parsed: MoveSequence = serde_json::from_str(&json).expect("deserialises");
         assert_eq!(parsed, sequence);
+    }
+
+    /// 图形定义随图层往返；旧 JSON（无 shape 字段）读到 None；同一形状
+    /// 的 cache_key 稳定（缓存文件名靠它跨进程不变），不同形状不同名。
+    #[test]
+    fn shape_data_roundtrips_and_keys_by_content() {
+        let shape = ShapeData {
+            kind: ShapeKind::Ellipse,
+            width: 320.0,
+            height: 180.0,
+            fill: Some([1.0, 0.4, 0.2, 1.0]),
+            stroke: Some([0.0, 0.0, 0.0, 1.0]),
+            stroke_width: 3.0,
+        };
+        let layer = SceneLayer {
+            id: "pill".into(),
+            name: "胶囊".into(),
+            kind: LayerKind::Shape,
+            asset: None,
+            shape: Some(shape),
+            transform: Default::default(),
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        };
+        let json = serde_json::to_string(&layer).expect("serialises");
+        let restored: SceneLayer = serde_json::from_str(&json).expect("deserialises");
+        assert_eq!(restored.shape, Some(shape));
+        let key_of = |layer: &SceneLayer| {
+            layer
+                .shape
+                .as_ref()
+                .map(|shape| shape.cache_key())
+                .unwrap_or_default()
+        };
+        assert_eq!(key_of(&restored), key_of(&layer), "the key survives a round-trip");
+
+        // 旧文档：没有 shape 字段的图层读作 None。
+        let old: SceneLayer = serde_json::from_str(
+            r#"{"id":"p","name":"图","kind":"shape","asset":null}"#,
+        )
+        .expect("an old shape layer reads");
+        assert_eq!(old.shape, None);
+        assert_ne!(key_of(&old), key_of(&layer), "the fingerprint follows the content");
     }
 }

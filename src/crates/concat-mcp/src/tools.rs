@@ -754,6 +754,18 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
                     "description": "Layer kind.",
                 },
                 "asset": { "type": "string", "description": "Image path, absolute or beside the scene." },
+                "shape": {
+                    "type": "object",
+                    "description": "A shape layer's figure (kind `shape`); rendered to a PNG at export/preview.",
+                    "properties": {
+                        "kind": { "type": "string", "enum": ["rect", "ellipse", "line"], "default": "rect" },
+                        "width": { "type": "number", "minimum": 1, "default": 100, "description": "Figure px width." },
+                        "height": { "type": "number", "minimum": 1, "default": 100, "description": "Figure px height." },
+                        "fill": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "RGBA 0..=1." },
+                        "stroke": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "RGBA 0..=1." },
+                        "strokeWidth": { "type": "number", "minimum": 0, "default": 0 },
+                    },
+                },
                 "x": { "type": "number", "description": "World x, px (centre)." },
                 "y": { "type": "number", "description": "World y, px (centre)." },
                 "scale": { "type": "number", "default": 1, "description": "Scale (1)." },
@@ -1002,7 +1014,7 @@ fn scene_render(
             report(fraction, 1.0, format!("{stage} {frame}/{total}"));
         }
     };
-    concat_studio::render_scene_with_cancel(&scene, scene_dir, &options, cancelled, &mut progress)
+    concat_studio::render_scene_with_cancel(&scene, &scene_dir, &options, cancelled, &mut progress)
         .map_err(ApiError::failed)?;
     Ok(Outcome::json(json!({ "output": output })))
 }
@@ -1142,6 +1154,22 @@ fn scene_add_layer(
         .unwrap_or(true);
     let expression = take_string(fields, "expression")?
         .or_else(|| existing.as_ref().and_then(|layer| layer.expression.clone()));
+    // A shape layer's figure: `shape: {kind, width, height, fill, stroke,
+    // strokeWidth}`, the colours rgba 0..=1 arrays. Kind `shape` with no
+    // figure keeps whatever the layer already had (upsert); without an
+    // existing one it errs - a shape with nothing to draw is a mistake.
+    let shape = match take_value(fields, "shape")? {
+        Some(value) => Some(
+            serde_json::from_value::<concat_scene::ShapeData>(value.clone())
+                .map_err(|error| scene_error(format!("invalid `shape`: {error}")))?,
+        ),
+        None => existing.as_ref().and_then(|layer| layer.shape),
+    };
+    if kind == concat_scene::LayerKind::Shape && shape.is_none() {
+        return Err(scene_error(
+            "a shape layer needs a `shape` figure (kind/width/height/…)",
+        ));
+    }
     if let Some(unknown) = fields.keys().next() {
         return Err(scene_error(format!("unknown field `{unknown}`")));
     }
@@ -1151,6 +1179,7 @@ fn scene_add_layer(
         name,
         kind,
         asset,
+        shape,
         transform: concat_scene::SceneTransform {
             x,
             y,
@@ -1303,6 +1332,16 @@ fn take_bool(fields: &mut Map<String, Value>, key: &str) -> Result<Option<bool>,
     }
 }
 
+/// Any JSON value - a shape figure's colours and numbers are best handed
+/// over whole, then parsed by the scene crate's own serde so the error
+/// names the field that is wrong.
+fn take_value(fields: &mut Map<String, Value>, key: &str) -> Result<Option<Value>, ApiError> {
+    match fields.remove(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => Ok(Some(value)),
+    }
+}
+
 fn parse_layer_kind(text: &str) -> Result<concat_scene::LayerKind, ApiError> {
     match text {
         "background" => Ok(concat_scene::LayerKind::Background),
@@ -1427,6 +1466,7 @@ fn scene_summary(scene: &concat_scene::Scene) -> Value {
                 "name": layer.name,
                 "kind": layer.kind,
                 "asset": layer.asset,
+                "shape": layer.shape,
                 "x": layer.transform.x,
                 "y": layer.transform.y,
                 "scale": layer.transform.scale,

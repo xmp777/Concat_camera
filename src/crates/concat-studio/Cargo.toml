@@ -13,3 +13,10 @@ concat-project.workspace = true
 concat-export.workspace = true
 concat-media.workspace = true
 serde_json.workspace = true
+# Shape layers materialize to PNGs with the same rasterizer the titles
+# use; `png-format` is its fast-deflate PNG writer.
+tiny-skia = { version = "0.12", features = ["png-format"] }
+
+[dev-dependencies]
+# The materialization tests read the PNGs back pixel by pixel.
+image = { version = "0.25", default-features = false, features = ["png"] }

@@ -634,3 +634,90 @@ fn an_agent_builds_and_renders_a_two_character_scene_headless() {
     assert_eq!(outside["result"]["isError"], true, "{outside}");
     agent.end();
 }
+
+/// A shape layer needs no asset at all: the agent names the figure, the
+/// render materializes it to a PNG and composites it like any image - the
+/// whole Phase 7 loop, end to end, from four tool calls to an MP4.
+#[test]
+fn an_agent_draws_a_shape_layer_and_renders_it() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let home = scratch.path();
+    let mut agent = Agent::spawn(home, "headless", &[]);
+    let (_, welcome) = agent.ask(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "e2e", "version": "1" },
+        }),
+    );
+    assert_eq!(welcome["result"]["protocolVersion"], "2025-06-18");
+    agent.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+
+    let scene_path = home.join("shape.json");
+    agent.tool(
+        "scene_create",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "name": "图形",
+            "worldWidth": 2000.0,
+            "worldHeight": 1125.0,
+            "width": 640,
+            "height": 360,
+            "fps": 30,
+            "background": [0.0, 0.0, 0.0, 1.0],
+        }),
+    );
+    let added = agent.tool(
+        "scene_add_layer",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "id": "pill",
+            "kind": "shape",
+            "shape": {
+                "kind": "rect",
+                "width": 300.0,
+                "height": 150.0,
+                "fill": [0.2, 0.9, 0.4, 1.0],
+            },
+            "x": 1000.0,
+            "y": 562.0,
+            "durationFrames": 45.0,
+        }),
+    );
+    let layer = &added["structuredContent"]["scene"]["layers"][0];
+    assert_eq!(layer["kind"], "shape", "{added}");
+    assert_eq!(layer["shape"]["kind"], "rect", "the figure rode the wire");
+
+    // A shape layer without a figure is a mistake the tool names.
+    let (_, bare) = agent.ask(
+        "tools/call",
+        json!({
+            "name": "scene_add_layer",
+            "arguments": {
+                "scenePath": scene_path.to_string_lossy(),
+                "id": "bare",
+                "kind": "shape",
+            },
+        }),
+    );
+    assert_eq!(bare["result"]["isError"], true, "{bare}");
+
+    let output = home.join("shape.mp4");
+    let rendered = agent.tool(
+        "scene_render",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "output": output.to_string_lossy(),
+            "crf": 30,
+            "preset": "ultrafast",
+        }),
+    );
+    assert!(output.is_file(), "the render writes the file: {rendered}");
+    let info = concat_media::probe(&output).expect("the file probes as media");
+    let video = info.require_video().expect("it has pictures");
+    assert_eq!((video.width, video.height), (640, 360));
+    let duration = info.duration.expect("a duration").as_f64();
+    assert!((duration - 1.5).abs() < 0.2, "duration {duration}");
+    agent.end();
+}

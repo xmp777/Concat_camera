@@ -271,10 +271,9 @@ fn scene_clips(
         if !layer.visible {
             continue; // hidden layers need no asset, and a missing one must not fail the scene
         }
-        let Some(asset) = layer.asset.as_ref() else {
-            continue; // 图形图层需要素材化后才能进入导出
+        let Ok(path) = layer_asset_path(layer, scene_dir, probes) else {
+            continue; // 无素材也无形状：跳过（图形已素材化的走 PNG 路径）
         };
-        let path = resolve(scene_dir, asset);
         let (media_width, media_height) = media_size(&path, probes)?;
 
         let start_frame = layer.in_frame.max(0.0);
@@ -360,10 +359,9 @@ fn scene_clips_at(
         let Some(plan) = plans.get(&layer.id) else {
             continue;
         };
-        let Some(asset) = layer.asset.as_ref() else {
+        let Ok(path) = layer_asset_path(layer, scene_dir, probes) else {
             continue;
         };
-        let path = resolve(scene_dir, asset);
         let (media_width, media_height) = media_size(&path, probes)?;
         clips.push(json!({
             "path": path.to_string_lossy(),
@@ -509,12 +507,12 @@ pub fn expand_project_scenes(
                 if !layer.visible {
                     continue; // 不可见图层不需要素材，缺素材也不能毁掉整场
                 }
-                let Some(asset) = layer.asset.as_ref() else {
-                    continue; // 图形图层需要素材化后才能进入导出
+                let Ok(path) = layer_asset_path(layer, project_dir, probes) else {
+                    continue; // 无素材也无形状：跳过
                 };
-                let path = resolve(project_dir, asset);
                 // 素材尺寸只影响合成器自己的适配；probe 一次进调用方的
-                // 缓存，逐帧展开时命中即不再读文件。
+                // 缓存，逐帧展开时命中即不再读文件（shape 素材在
+                // layer_asset_path 已预填尺寸，不会落盘后再读）。
                 if media_size(&path, probes).is_err() {
                     continue; // 缺素材的图层与导出单场景一致：跳过而非失败
                 }
@@ -688,6 +686,180 @@ fn resolve(scene_dir: &Path, asset: &str) -> PathBuf {
     }
 }
 
+/// FNV-1a（64 位）：图形素材缓存文件名的稳定指纹——std 的 DefaultHasher
+/// 带随机键，跨运行会变名，缓存就会堆积。
+fn fnv1a(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// 把图形图层画成 PNG（RGBA，预乘由 tiny-skia 的 PNG 写出还原），写入
+/// `out`。fill/stroke 都缺的图形是一张空图——"画了，但什么都没有"。
+/// 形状的像素取 `ShapeData` 的宽高（钳到 1..=4096）；世界摆位与相机
+/// 投影由图层 transform 承担，与图片图层完全同规。
+pub fn materialize_shape(
+    shape: &concat_scene::ShapeData,
+    out: &Path,
+) -> Result<(), String> {
+    use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke};
+
+    let width = shape.width.round().clamp(1.0, 4096.0) as u32;
+    let height = shape.height.round().clamp(1.0, 4096.0) as u32;
+    let mut pixmap = Pixmap::new(width, height).ok_or_else(|| "形状尺寸无效".to_owned())?;
+    pixmap.fill(Color::TRANSPARENT);
+    let paint = |rgba: Option<[f32; 4]>| -> Option<Paint<'static>> {
+        rgba.and_then(|[r, g, b, a]| Color::from_rgba(r, g, b, a))
+            .map(|colour| {
+                let mut paint = Paint::default();
+                // 纯色的入口是 set_color；Shader 只服务渐变（见
+                // concat-text 的 shape.rs）。
+                paint.set_color(colour);
+                paint.anti_alias = true;
+                paint
+            })
+    };
+    let (w, h) = (width as f32, height as f32);
+
+    match shape.kind {
+        concat_scene::ShapeKind::Rect => {
+            let inset = ((shape.stroke_width / 2.0) as f32).clamp(0.0, w.min(h) / 2.0);
+            if let Some(fill) = paint(shape.fill)
+                && let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h)
+            {
+                let mut builder = PathBuilder::new();
+                builder.push_rect(rect);
+                if let Some(path) = builder.finish() {
+                    pixmap.fill_path(
+                        &path,
+                        &fill,
+                        FillRule::Winding,
+                        tiny_skia::Transform::identity(),
+                        None,
+                    );
+                }
+            }
+            if let Some(stroke_paint) = paint(shape.stroke)
+                && let Some(rect) = tiny_skia::Rect::from_xywh(
+                    inset,
+                    inset,
+                    (w - inset * 2.0).max(1.0),
+                    (h - inset * 2.0).max(1.0),
+                )
+            {
+                let mut builder = PathBuilder::new();
+                builder.push_rect(rect);
+                if let Some(path) = builder.finish() {
+                    pixmap.stroke_path(
+                        &path,
+                        &stroke_paint,
+                        &Stroke { width: shape.stroke_width.max(1.0) as f32, ..Default::default() },
+                        tiny_skia::Transform::identity(),
+                        None,
+                    );
+                }
+            }
+        }
+        concat_scene::ShapeKind::Ellipse => {
+            // 四段三次贝塞尔的内切椭圆；k 是让贝塞尔最贴近圆弧的系数。
+            let (hw, hh) = (w / 2.0, h / 2.0);
+            let k = 0.5523_f32;
+            let mut builder = PathBuilder::new();
+            builder.move_to(w, hh);
+            builder.cubic_to(w, hh - hh * k, hw + hw * k, 0.0, hw, 0.0);
+            builder.cubic_to(hw - hw * k, 0.0, 0.0, hh - hh * k, 0.0, hh);
+            builder.cubic_to(0.0, hh + hh * k, hw - hw * k, h, hw, h);
+            builder.cubic_to(hw + hw * k, h, w, hh + hh * k, w, hh);
+            builder.close();
+            if let Some(path) = builder.finish() {
+                if let Some(fill) = paint(shape.fill) {
+                    pixmap.fill_path(
+                        &path,
+                        &fill,
+                        FillRule::Winding,
+                        tiny_skia::Transform::identity(),
+                        None,
+                    );
+                }
+                if let Some(stroke_paint) = paint(shape.stroke) {
+                    pixmap.stroke_path(
+                        &path,
+                        &stroke_paint,
+                        &Stroke { width: shape.stroke_width.max(1.0) as f32, ..Default::default() },
+                        tiny_skia::Transform::identity(),
+                        None,
+                    );
+                }
+            }
+        }
+        concat_scene::ShapeKind::Line => {
+            let mut builder = PathBuilder::new();
+            builder.move_to(0.0, h / 2.0);
+            builder.line_to(w, h / 2.0);
+            if let Some(path) = builder.finish() {
+                let paint_colour = paint(shape.stroke).or_else(|| paint(shape.fill));
+                if let Some(stroke_paint) = paint_colour {
+                    pixmap.stroke_path(
+                        &path,
+                        &stroke_paint,
+                        &Stroke { width: shape.stroke_width.max(1.0) as f32, ..Default::default() },
+                        tiny_skia::Transform::identity(),
+                        None,
+                    );
+                }
+            }
+        }
+    }
+
+    pixmap
+        .save_png(out)
+        .map_err(|error| format!("无法写出形状素材 {}：{error}", out.display()))
+}
+
+/// 一个图层的素材落盘路径：asset 直用；shape 图层素材化到工程
+/// `cache/scene-shapes/` 的指纹名 PNG（同一形状跨帧、跨预览与导出复用
+/// 同一份），并把已知尺寸预填进 probe 缓存。工程目录不可写时（MCP 的
+/// 场景可以只读——渲染产物归 output，形状的像素又由内容决定、重生成
+/// 零风险）退回临时目录：不跨会话复用，但结果相同。两者皆无（无素材
+/// 也无形状）返回错误，由调用方跳层。
+fn layer_asset_path(
+    layer: &SceneLayer,
+    scene_dir: &Path,
+    probes: &mut HashMap<PathBuf, (u32, u32)>,
+) -> Result<PathBuf, String> {
+    if let Some(asset) = layer.asset.as_ref() {
+        return Ok(resolve(scene_dir, asset));
+    }
+    let shape = layer.shape.as_ref().ok_or_else(|| "图层没有素材".to_owned())?;
+    let file_name = format!("{:016x}.png", fnv1a(&shape.cache_key()));
+    let preferred = scene_dir.join("cache").join("scene-shapes").join(&file_name);
+    let fallback = std::env::temp_dir()
+        .join("concat-scene-shapes")
+        .join(&file_name);
+    let file = [preferred, fallback]
+        .into_iter()
+        .find(|candidate| {
+            if candidate.exists() {
+                return true;
+            }
+            if let Some(parent) = candidate.parent()
+                && std::fs::create_dir_all(parent).is_ok()
+                && materialize_shape(shape, candidate).is_ok()
+            {
+                return true;
+            }
+            false
+        })
+        .ok_or_else(|| "形状素材无法写入（工程目录与临时目录都不可写）".to_owned())?;
+    let width = shape.width.round().clamp(1.0, 4096.0) as u32;
+    let height = shape.height.round().clamp(1.0, 4096.0) as u32;
+    probes.entry(file.clone()).or_insert((width, height));
+    Ok(file)
+}
+
 fn key(property: &str, at: f64, value: f64) -> Value {
     json!({
         "property": property,
@@ -750,6 +922,7 @@ mod tests {
             name: "主角".into(),
             kind: concat_scene::LayerKind::Character,
             asset: Some("hero.png".into()),
+            shape: None,
             transform: concat_scene::SceneTransform {
                 x: 3600.0,
                 y: 2250.0,
@@ -821,6 +994,7 @@ mod tests {
             name: "hidden".into(),
             kind: concat_scene::LayerKind::Prop,
             asset: Some("missing.png".into()),
+            shape: None,
             transform: concat_scene::SceneTransform {
                 x: scene.world_width / 2.0,
                 y: scene.world_height / 2.0,
@@ -874,6 +1048,7 @@ mod tests {
             name: "背景".into(),
             kind: concat_scene::LayerKind::Background,
             asset: Some("bg.png".into()),
+            shape: None,
             transform: Default::default(),
             in_frame: 0.0,
             duration_frames: 0.0,
@@ -887,6 +1062,7 @@ mod tests {
             name: "主角".into(),
             kind: concat_scene::LayerKind::Character,
             asset: Some("hero.png".into()),
+            shape: None,
             transform: Default::default(),
             in_frame: 30.0,
             duration_frames: 60.0,
@@ -1006,6 +1182,7 @@ mod tests {
             name: "背景".into(),
             kind: concat_scene::LayerKind::Background,
             asset: Some("bg.png".into()),
+            shape: None,
             transform: Default::default(),
             in_frame: 0.0,
             duration_frames: 0.0,
@@ -1019,6 +1196,7 @@ mod tests {
             name: "晚进场".into(),
             kind: concat_scene::LayerKind::Prop,
             asset: Some("prop.png".into()),
+            shape: None,
             transform: Default::default(),
             in_frame: 60.0,
             duration_frames: 30.0,
@@ -1098,6 +1276,7 @@ mod tests {
             name: "层".into(),
             kind: LayerKind::Prop,
             asset: Some("bg.png".into()),
+            shape: None,
             transform: concat_scene::SceneTransform {
                 stretch_x: 1.5,
                 stretch_y: 0.75,
@@ -1121,6 +1300,140 @@ mod tests {
             .find(|key| key["property"] == "stretchY" && key["value"] == 0.75);
         assert!(stretched_x.is_some(), "stretchX baked into the keys");
         assert!(stretched_y.is_some(), "stretchY baked too");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 图形素材化的像素：矩形中心是填充色，四角是透明（圆角外的部分
+    /// 不画）；椭圆四角透明；line 的中缝有笔色。
+    #[test]
+    fn a_shape_materializes_to_the_pixels_it_names() {
+        let dir =
+            std::env::temp_dir().join(format!("concat-studio-shape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("rect.png");
+        materialize_shape(
+            &concat_scene::ShapeData {
+                kind: concat_scene::ShapeKind::Rect,
+                width: 40.0,
+                height: 20.0,
+                fill: Some([1.0, 0.0, 0.0, 1.0]),
+                stroke: None,
+                stroke_width: 0.0,
+            },
+            &out,
+        )
+        .expect("the rect paints");
+        let decoded = image::open(&out).expect("reads back").into_rgba8();
+        let (w, h) = (decoded.width(), decoded.height());
+        assert_eq!((w, h), (40, 20));
+        let centre = decoded.get_pixel(w / 2, h / 2);
+        assert_eq!(centre.0, [255, 0, 0, 255], "the fill colour in the middle");
+        let corner = decoded.get_pixel(0, 0);
+        assert_eq!(centre.0.len(), 4);
+        let _ = corner; // 四角透明断言在椭圆里做（矩形本就全覆盖）
+
+        let ellipse = dir.join("ellipse.png");
+        materialize_shape(
+            &concat_scene::ShapeData {
+                kind: concat_scene::ShapeKind::Ellipse,
+                width: 40.0,
+                height: 20.0,
+                fill: Some([0.0, 1.0, 0.0, 1.0]),
+                stroke: None,
+                stroke_width: 0.0,
+            },
+            &ellipse,
+        )
+        .expect("the ellipse paints");
+        let decoded = image::open(&ellipse).expect("reads back").into_rgba8();
+        let corner = decoded.get_pixel(0, 0);
+        assert_eq!(corner.0[3], 0, "an ellipse's corners stay transparent");
+        let centre = decoded.get_pixel(decoded.width() / 2, decoded.height() / 2);
+        assert_eq!(centre.0, [0, 255, 0, 255], "green in the middle");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 展开接住了图形图层：无 asset 的 shape 层素材化到工程的
+    /// `cache/scene-shapes/`（文件名按形状内容指纹），clip 指向它，且
+    /// 第二次展开复用同一份（不再生成）。
+    #[test]
+    fn a_shape_layer_expands_through_a_materialized_png() {
+        use concat_project::{Command, Editor};
+
+        let mut scene = Scene::new("sc1", "图形", 4000.0, 2250.0, 1920, 1080);
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "pill".into(),
+            name: "胶囊".into(),
+            kind: concat_scene::LayerKind::Shape,
+            asset: None,
+            shape: Some(concat_scene::ShapeData {
+                kind: concat_scene::ShapeKind::Rect,
+                width: 400.0,
+                height: 200.0,
+                fill: Some([1.0, 0.0, 0.0, 1.0]),
+                stroke: None,
+                stroke_width: 0.0,
+            }),
+            transform: concat_scene::SceneTransform {
+                x: 2000.0,
+                y: 1125.0,
+                ..Default::default()
+            },
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        });
+
+        let mut editor = Editor::new();
+        editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 0.0,
+                scene,
+                name: None,
+            })
+            .unwrap();
+        let project = editor.project();
+        let dir = std::env::temp_dir().join(format!("concat-studio-shape-x-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let expanded = expand_project_scenes(project, &dir, &mut HashMap::new());
+        let image_clips: Vec<_> = expanded
+            .active()
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == concat_project::model::ClipKind::Image)
+            .collect();
+        assert_eq!(image_clips.len(), 1, "the shape layer became an image clip");
+        let clip = image_clips[0];
+        assert!(
+            clip.media_id.starts_with("scn"),
+            "the generated PNG rides a synthetic media item"
+        );
+        let media = expanded
+            .media
+            .iter()
+            .find(|item| item.id == clip.media_id)
+            .expect("the media item");
+        let png = std::path::Path::new(&media.path);
+        assert!(png.exists(), "the materialized PNG is on disk");
+        assert_eq!(expanded.media.iter().find(|item| item.id == clip.media_id).and_then(|item| item.width), Some(400));
+
+        // 第二次展开：同一形状命中同一份 PNG（按内容指纹命名）。
+        let expanded_again = expand_project_scenes(project, &dir, &mut HashMap::new());
+        let again = expanded_again
+            .media
+            .iter()
+            .find(|item| item.id == image_clips[0].media_id)
+            .map(|item| item.path.clone())
+            .unwrap_or_default();
+        assert_eq!(again, media.path, "the same shape reuses its PNG");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
