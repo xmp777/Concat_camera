@@ -1,0 +1,26 @@
+    Checking concat-studio v0.2.12 (G:\Projects\Concat_camera\src\crates\concat-studio)
+error[E0597]: `clip_scene` does not live long enough
+   --> crates\concat-studio\src\lib.rs:637:60
+    |
+507 |             let Some(clip_scene) = scene_of(clip.scene_id.as_deref()).or_else(|| scene_of(None))
+    |                      ---------- binding `clip_scene` declared here
+...
+526 |             let mut ordered: Vec<&SceneLayer> = clip_scene.layers.iter().collect();
+    |                 ----------- variable `ordered` declared here
+...
+637 |                         .map(|(track, _)| (track.clone(), &clip_scene)),
+    |                              ------------                  ^^^^^^^^^^ borrowed value does not live long enough
+    |                              |
+    |                              value captured here
+...
+641 |         }
+    |         - `clip_scene` dropped here while still borrowed
+...
+650 |                 scene_tracks.iter().find(|(track, _)| *track == lane)
+    |                 ------------ borrow later used here
+    |
+    = note: `ordered` is a collection that stores borrowed references, but `clip_scene` does not live long enough to be stored in it
+    = help: buffer reuse with borrowed references requires unsafe code or restructuring
+
+For more information about this error, try `rustc --explain E0597`.
+error: could not compile `concat-studio` (lib) due to 1 previous error

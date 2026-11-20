@@ -417,16 +417,28 @@ pub fn expand_project_scenes(
 ) -> Project {
     use concat_project::model::{Background, Clip, ClipKey, ClipKind, KeyEase, KeyProperty};
 
-    let Some(scene) = project
+    // A document may carry several scenes (`scenes` keyed by id); a clip
+    // expands the scene its `scene_id` names. The legacy single-`scene`
+    // field answers for clips that name it, and for documents that have
+    // only that.
+    let parse = |value: &Value| serde_json::from_value::<Scene>(value.clone()).ok();
+    let scenes_map: HashMap<String, Scene> = project
         .extra
-        .get(SCENE_KEY)
-        .and_then(|value| serde_json::from_value::<Scene>(value.clone()).ok())
-    else {
-        return project.clone();
+        .get("scenes")
+        .and_then(|value| value.as_object())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(id, scene)| parse(scene).map(|scene| (id.clone(), scene)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let legacy = project.extra.get(SCENE_KEY).and_then(|value| parse(value));
+    let scene_of = |clip_scene_id: Option<&str>| -> Option<Scene> {
+        clip_scene_id
+            .and_then(|id| scenes_map.get(id).cloned())
+            .or_else(|| legacy.clone())
     };
-    let fps = scene.fps();
-    let (width, height) = viewport_of(&scene);
-    let scene_end = scene.duration_frames();
 
     let mut media = project.media.clone();
     let mut media_ids: HashMap<PathBuf, String> = HashMap::new();
@@ -484,20 +496,34 @@ pub fn expand_project_scenes(
         let mut tracks = timeline.tracks.clone();
         let mut clips: Vec<Clip> = Vec::new();
         // 展开片段所在的轨；展开后统一决定哪条轨拿背景。
-        let mut scene_tracks: Vec<String> = Vec::new();
+        let mut scene_tracks: Vec<(String, String, String)> = Vec::new();
         for clip in timeline.clips.iter() {
             if clip.kind != ClipKind::Scene {
                 clips.push((**clip).clone());
                 continue;
             }
-            if clip.scene_id.as_deref() != Some(scene.id.as_str()) {
-                // 指向别的场景：工程只有一个场景，该片段渲染为无——从
-                // 展开后的时间线里移除，而不是留下一个 flatten 会跳过、
-                // 位置上却是空洞的片段。
+            // 按片段的 scene_id 找它要播的场景；找不到（或没写）就回落
+            // 到文档的第一个场景——单场景工程的片段通常连 id 都省。
+            let Some(clip_scene) = scene_of(clip.scene_id.as_deref()).or_else(|| scene_of(None))
+            else {
                 continue;
-            }
+            };
+            let clip_fps = clip_scene.fps();
+            let clip_width = clip_scene
+                .camera
+                .keys
+                .first()
+                .map(|key| key.pose.viewport_width)
+                .unwrap_or(1920);
+            let clip_height = clip_scene
+                .camera
+                .keys
+                .first()
+                .map(|key| key.pose.viewport_height)
+                .unwrap_or(1080);
+            let scene_end = clip_scene.duration_frames();
             let window = clip.duration.max(0.0);
-            let mut ordered: Vec<&SceneLayer> = scene.layers.iter().collect();
+            let mut ordered: Vec<&SceneLayer> = clip_scene.layers.iter().collect();
             ordered.sort_by_key(|layer| layer.z);
             // 合成器每条轨在同一时刻只认一个 clip（后者覆盖前者）——
             // 场景的图层必须各占一条轨：**第一个实际产出片段的层**留在
@@ -524,25 +550,25 @@ pub fn expand_project_scenes(
                 if media_size(&path, probes).is_err() {
                     continue; // 缺素材的图层与导出单场景一致：跳过而非失败
                 }
-                let layer_start = layer.in_frame.max(0.0) / fps;
+                let layer_start = layer.in_frame.max(0.0) / clip_fps;
                 let layer_frames = if layer.duration_frames > 0.0 {
                     layer.duration_frames
                 } else {
                     (scene_end - layer.in_frame.max(0.0)).max(1.0)
                 };
-                let layer_end = (layer.in_frame.max(0.0) + layer_frames) / fps;
+                let layer_end = (layer.in_frame.max(0.0) + layer_frames) / clip_fps;
                 let inter_start = layer_start.min(window);
                 let inter_end = layer_end.min(window);
                 if inter_end - inter_start <= 0.0 {
                     continue;
                 }
                 let samples = sample_layer(
-                    &scene,
+                    &clip_scene,
                     layer,
-                    inter_start * fps,
-                    (inter_end - inter_start) * fps,
-                    width,
-                    height,
+                    inter_start * clip_fps,
+                    (inter_end - inter_start) * clip_fps,
+                    clip_width,
+                    clip_height,
                 );
                 if samples.is_empty() {
                     continue;
@@ -579,7 +605,7 @@ pub fn expand_project_scenes(
                 out.opacity = layer.opacity;
                 // 展开片段保留场景归属：既标记来源（背景轨判定用它），
                 // 也不让展开产物在二次展开时被再次当作 Scene 片段。
-                out.scene_id = Some(scene.id.clone());
+                out.scene_id = Some(clip_scene.id.clone());
                 // keyed 属性是绝对值；base 保持中性（Clip::blank），运动
                 // 全部走关键帧——相机投影与图层自身的非均匀拉伸都在其列。
                 out.keys = samples
@@ -605,7 +631,13 @@ pub fn expand_project_scenes(
                 group.push((layer_track, out));
             }
             if !group.is_empty() {
-                scene_tracks.extend(group.iter().map(|(track, _)| track.clone()));
+                scene_tracks.extend(group.iter().map(|(track, _)| {
+                    (
+                        track.clone(),
+                        clip_scene.id.clone(),
+                        scene_background_hex(&clip_scene),
+                    )
+                }));
                 clips.extend(group.into_iter().map(|(_, clip)| clip));
             }
         }
@@ -613,14 +645,18 @@ pub fn expand_project_scenes(
         expanded.tracks = tracks;
         expanded.clips = clips.into_iter().map(std::sync::Arc::new).collect();
         // 场景背景只在最下方图像轨生效——与一个真正的图像片段完全同规。
+        // 多场景下每条轨按自己的场景取色。
         let lane = expanded.background_lane().map(str::to_owned);
         if let Some(lane) = lane
-            && scene_tracks.iter().any(|track| *track == lane)
+            && let Some((_, lane_colour, lane_scene_id)) =
+                scene_tracks.iter().find(|(track, _, _)| *track == lane)
         {
-            let color = scene_background_hex(&scene);
+            let color = lane_colour.clone();
+            let lane_scene_id = lane_scene_id.clone();
             for clip in expanded.clips.iter_mut() {
                 let clip = std::sync::Arc::make_mut(clip);
-                if clip.track_id == lane && clip.scene_id.as_deref() == Some(scene.id.as_str()) {
+                if clip.track_id == lane && clip.scene_id.as_deref() == Some(lane_scene_id.as_str())
+                {
                     clip.background = Some(Background::Color {
                         color: color.clone(),
                     });

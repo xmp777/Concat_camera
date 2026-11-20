@@ -1,0 +1,5 @@
+    Checking concat-studio v0.2.12 (G:\Projects\Concat_camera\src\crates\concat-studio)
+crates\concat-studio\src\lib.rs:532:28: error[E0425]: cannot find value `width` in this scope: not found in this scope
+crates\concat-studio\src\lib.rs:538:28: error[E0425]: cannot find value `height` in this scope: not found in this scope
+crates\concat-studio\src\lib.rs:652:43: error[E0271]: expected `{closure@lib.rs:652:30}` to return `(String, &Scene)`, but it returns `(String, String)`: expected `(String, &Scene)`, found `(String, String)`
+error: could not compile `concat-studio` (lib) due to 3 previous errors

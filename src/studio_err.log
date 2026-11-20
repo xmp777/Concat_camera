@@ -1,0 +1,8 @@
+    Checking concat-studio v0.2.12 (G:\Projects\Concat_camera\src\crates\concat-studio)
+crates\concat-studio\src\lib.rs:532:28: error[E0425]: cannot find value `width` in this scope: not found in this scope
+crates\concat-studio\src\lib.rs:538:28: error[E0425]: cannot find value `height` in this scope: not found in this scope
+crates\concat-studio\src\lib.rs:585:21: error[E0425]: cannot find value `width` in this scope: not found in this scope
+crates\concat-studio\src\lib.rs:586:21: error[E0425]: cannot find value `height` in this scope: not found in this scope
+crates\concat-studio\src\lib.rs:661:47: error[E0425]: cannot find value `scene` in this scope: not found in this scope
+crates\concat-studio\src\lib.rs:664:78: error[E0425]: cannot find value `scene` in this scope: not found in this scope
+error: could not compile `concat-studio` (lib) due to 6 previous errors

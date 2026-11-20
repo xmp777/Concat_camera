@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use serde_json::{Map, Value};
+
 use concat_scene::Scene;
 
 use super::{Command, CommandError, IdMint, Outcome};
@@ -23,6 +25,8 @@ use crate::model::{Clip, ClipKind, Project};
 /// name as `SCENE_KEY`; two constants rather than a shared one, because
 /// the dependency runs the other way.
 const SCENE_KEY: &str = "scene";
+/// The multi-scene map: keyed by the scene's own id; read first.
+const SCENES_KEY: &str = "scenes";
 
 /// How close two camera-key frames must be to name the same key - the
 /// tolerance [`concat_scene::CameraTrack::add_key`] upserts within.
@@ -57,27 +61,35 @@ pub(super) fn apply(
                     _ => {}
                 }
             }
-            match read_scene(project) {
-                // Same id: the carried scene is the newer edit of it (a
-                // standalone file re-inserted after more drawing), so the
-                // document takes it — silently playing the old pixels the
-                // caller just replaced would be the worse surprise.
-                Ok(existing) if existing.id == scene.id => {
-                    if existing == scene {
-                        return Ok(Outcome {
-                            created_id: None,
-                            applied: false,
-                        });
+            // The carried scene lands in the `scenes` map under its own
+            // id — same id replaces (a standalone file re-inserted after
+            // more drawing), a new id adds a second scene the map keeps.
+            // The legacy single-`scene` mirror stays pointed at the first
+            // entry so older readers keep opening the document.
+            {
+                let value = serde_json::to_value(&scene).map_err(|_| CommandError::SceneGone)?;
+                let existing = read_scene_value(project, Some(&scene.id));
+                if let Ok(previous) = existing
+                    && previous == value
+                {
+                    return Ok(Outcome {
+                        created_id: None,
+                        applied: true,
+                    });
+                }
+                let map = project
+                    .extra
+                    .entry::<String>(SCENES_KEY.into())
+                    .or_insert_with(|| Value::Object(Map::new()));
+                if let Value::Object(entries) = map {
+                    entries.insert(scene.id.clone(), value);
+                }
+                if project.extra.get(SCENE_KEY).is_none() {
+                    if let Some(first) = read_first_scene_value(project) {
+                        project.extra.insert(SCENE_KEY.into(), first);
                     }
                 }
-                Ok(_) => return Err(CommandError::SceneMismatch),
-                Err(CommandError::SceneGone) => {}
-                Err(error) => return Err(error),
             }
-            project.extra.insert(
-                SCENE_KEY.into(),
-                serde_json::to_value(&scene).map_err(|_| CommandError::SceneGone)?,
-            );
             let timeline = project.active_mut();
             let track_id = match track_id {
                 // Validated above against the same timeline.
@@ -114,7 +126,7 @@ pub(super) fn apply(
             rotation,
             easing,
         } => {
-            let mut scene = read_scene(project)?;
+            let mut scene = read_scene(project, None)?;
             // The pose the overrides land on: the key already at the
             // frame when there is one - so keying zoom at a keyed frame
             // keeps the x the key holds, not one interpolated to it -
@@ -149,7 +161,7 @@ pub(super) fn apply(
             write_scene(project, &scene)
         }
         Command::RemoveSceneCameraKey { frame } => {
-            let mut scene = read_scene(project)?;
+            let mut scene = read_scene(project, None)?;
             // The last key carries the viewport every renderer reads the
             // output frame from; taking it off would silently drop the
             // scene back to a 1920×1080 default. Remove all-but-one is the
@@ -178,32 +190,73 @@ pub(super) fn apply(
 }
 
 /// The project's scene, parsed from the document. The raw value stays
-/// whatever it was: an arm that errors out has touched nothing.
-fn read_scene(project: &Project) -> Result<Scene, CommandError> {
-    let value = project
-        .extra
-        .get(SCENE_KEY)
-        .ok_or(CommandError::SceneGone)?;
-    serde_json::from_value(value.clone()).map_err(|_| CommandError::SceneGone)
+/// whatever it was: an arm that errors out has touched nothing. Reads
+/// from the `scenes` map first, falling back to the legacy single-`scene`
+/// key so documents written before Phase 8 keep playing.
+fn read_scene(project: &Project, scene_id: Option<&str>) -> Result<Scene, CommandError> {
+    read_scene_value(project, scene_id)
+        .and_then(|value| serde_json::from_value(value).map_err(|_| CommandError::SceneGone))
+}
+
+/// The raw JSON of the scene the command names: the `scenes` map keyed by
+/// id when the document carries one, else the legacy `scene` field.
+fn read_scene_value(project: &Project, scene_id: Option<&str>) -> Result<Value, CommandError> {
+    let scenes = project.extra.get(SCENES_KEY);
+    let legacy = project.extra.get(SCENE_KEY);
+    let picked = match (scene_id, scenes, legacy) {
+        (Some(id), Some(map), _) => map.get(id).cloned().ok_or(CommandError::SceneGone)?,
+        (_, Some(map), legacy) => map
+            .as_object()
+            .and_then(|entries| entries.values().next())
+            .cloned()
+            .or_else(|| legacy.cloned())
+            .ok_or(CommandError::SceneGone)?,
+        (_, None, legacy) => legacy.cloned().ok_or(CommandError::SceneGone)?,
+    };
+    Ok(picked)
 }
 
 /// Writes the scene back and reports whether the document changed. The
 /// comparison is on the JSON: a key written with the pose it already
 /// held counts as "nothing happened", or the undo history would record
-/// phantom edits.
+/// phantom edits. The scene lands in the `scenes` map (keyed by id) and,
+/// while the legacy single-`scene` field is still the one older readers
+/// open, there too - one write keeps both shapes true.
 fn write_scene(project: &mut Project, scene: &Scene) -> Result<Outcome, CommandError> {
     let value = serde_json::to_value(scene).map_err(|_| CommandError::SceneGone)?;
-    let changed = project
+    let mut changed = false;
+    let scenes = project
         .extra
-        .get(SCENE_KEY)
-        .is_none_or(|previous| *previous != value);
-    if changed {
-        project.extra.insert(SCENE_KEY.into(), value);
+        .entry::<String>(SCENES_KEY.into())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Value::Object(map) = scenes {
+        changed |= map.get(scene.id.as_str()) != Some(&value);
+        map.insert(scene.id.clone(), value);
+    }
+    // The legacy mirror stays the single scene the older readers (studio,
+    // the pre-Phase-8 editor) open: the first of the map, which is the
+    // same scene while a document carries one.
+    if let Some(first) = read_first_scene_value(project) {
+        let mirrored = project
+            .extra
+            .get(SCENE_KEY)
+            .is_none_or(|previous| *previous != first);
+        if mirrored {
+            project.extra.insert(SCENE_KEY.into(), first);
+            changed = true;
+        }
     }
     Ok(Outcome {
         created_id: None,
         applied: changed,
     })
+}
+
+/// The first scene of the `scenes` map, for the legacy mirror.
+fn read_first_scene_value(project: &Project) -> Option<Value> {
+    let map = project.extra.get(SCENES_KEY)?;
+    let value = map.as_object()?.values().next().cloned();
+    value
 }
 
 #[cfg(test)]
@@ -358,28 +411,45 @@ mod tests {
         );
     }
 
-    /// A project holds one scene: a different one is refused, and the
-    /// refusal leaves the document as it was.
+    /// A second scene joins the `scenes` map under its own id — the
+    /// Phase 8 multi-scene container — and each clip keeps its own
+    /// binding. The legacy mirror stays on the first entry.
     #[test]
-    fn a_second_scene_is_refused() {
-        let (mut editor, _id, scene) = editor_with_scene();
+    fn a_second_scene_coexists_in_the_scenes_map() {
+        let (mut editor, first_id, scene) = editor_with_scene();
         let other = Scene {
             id: "sc2".into(),
+            name: "第二幕".into(),
             ..scene.clone()
         };
-        let error = editor
+        let second = editor
             .apply(Command::AddSceneClip {
                 track_id: None,
                 above: false,
                 start: 3.0,
-                scene: other,
+                scene: other.clone(),
                 name: None,
             })
-            .unwrap_err();
-        assert!(matches!(error, CommandError::SceneMismatch));
+            .unwrap();
+        assert_eq!(editor.project().active().clips.len(), 2);
+        let clip = editor
+            .project()
+            .active()
+            .clip(second.created_id.as_deref().unwrap())
+            .unwrap()
+            .clone();
+        assert_eq!(clip.scene_id.as_deref(), Some("sc2"));
+        assert_eq!(clip.duration, other.duration_frames() / other.fps());
+        let project = editor.project();
+        let scenes = project
+            .extra
+            .get(SCENES_KEY)
+            .and_then(|value| value.as_object())
+            .expect("scenes map");
+        assert_eq!(scenes.len(), 2, "sc1 and sc2 both stored");
+        // The legacy mirror still names the first scene.
         assert_eq!(scene_of(editor.project()).id, "sc1");
-        // The refused add left no clip behind.
-        assert_eq!(editor.project().active().clips.len(), 1);
+        let _ = first_id;
     }
 
     /// A camera key comes off at the frame it was put on, and taking one
