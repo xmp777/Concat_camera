@@ -93,10 +93,11 @@ impl Default for SceneTransform {
 }
 
 /// 图形种类（rect / ellipse / line）
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShapeKind {
     /// 填充矩形
+    #[default]
     Rect,
     /// 内切椭圆
     Ellipse,
@@ -181,7 +182,6 @@ impl ShapeData {
         )
         // 颜色的指纹取 f32 的位模式级精度（rgba 里 .3 小数会碰撞），
         // 见 rgba()。
-    }
     }
 }
 

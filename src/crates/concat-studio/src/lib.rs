@@ -466,6 +466,7 @@ pub fn expand_project_scenes(
                 audio_codec: None,
                 has_audio: false,
                 audio_tracks: Vec::new(),
+                beats: None,
                 placeholder: false,
                 color_range: None,
                 color_space: Default::default(),

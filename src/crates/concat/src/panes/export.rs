@@ -13,11 +13,12 @@
 //! pane reads and asks things of but never reaches into for its own
 //! fields.
 
+use concat_core::Halt;
 use concat_host::export::{self, ExportSpec};
 use concat_media::ColorRange;
 
 use crate::format::{bytes, eta};
-use crate::host::{on_ui, spawn_long};
+use crate::host::{on_ui, spawn_export};
 use crate::i18n::{self, t, tf};
 use crate::panes::Msg;
 use crate::platform;
@@ -60,7 +61,7 @@ pub enum ExportMsg {
         stage: String,
     },
     /// The render's worker is done: the file written, or why not.
-    Finished(Result<String, String>),
+    Finished(Result<String, Halt>),
     /// The phone has moved the file to where it shows it - the path under
     /// the phone's storage - or could not, and the file is where it was.
     Published(Result<String, String>),
@@ -229,11 +230,18 @@ impl ExportPane {
                 let folder = platform::published_folder().unwrap_or_default();
                 studio.notify(&tf("export.couldNotPublish", &[&folder, &error]), true);
             }
-            ExportMsg::Finished(Err(error)) => {
-                if self.phase == ExportPhase::Idle {
-                    // Cancelled: the sheet already went back to idle.
-                    return;
+            // Cancelled: nothing to say. Asked for through the sheet, it
+            // already went back to idle; stopped any other way, it does
+            // so here rather than go on showing an export that has ended.
+            ExportMsg::Finished(Err(Halt::Cancelled)) => {
+                if self.phase == ExportPhase::Running {
+                    self.phase = ExportPhase::Idle;
+                    self.progress = 0.0;
                 }
+            }
+            // A failure is said whatever the sheet shows: Cancel pressed
+            // as an export was failing does not make its failure a cancel.
+            ExportMsg::Finished(Err(Halt::Failed(error))) => {
                 self.phase = ExportPhase::Failed;
                 self.message = error.clone();
                 studio.notify(&tf("export.exportFailed", &[&error]), true);
@@ -518,7 +526,7 @@ impl ExportPane {
         self.written.clear();
         self.started_at = Some(std::time::Instant::now());
 
-        spawn_long(
+        spawn_export(
             move || {
                 let job = job;
                 let cancel = job.cancel_flag();
@@ -527,7 +535,7 @@ impl ExportPane {
                 // of an HD edit was its captions painted at HD and scaled
                 // up, soft. The API's export paints them so too.
                 let Some(titles) = titles.clips_unless(&project, width, height, cancel) else {
-                    return Err("export cancelled".to_owned());
+                    return Err(Halt::Cancelled);
                 };
                 let titles = titles.into_iter().map(|title| title.clip).collect();
                 // This thread works from a snapshot, not the session, so it
@@ -554,7 +562,7 @@ impl ExportPane {
                     log::debug!("export: closed {closed} idle preview decoder(s) before starting");
                 }
                 if stopped() {
-                    return Err("export cancelled".to_owned());
+                    return Err(Halt::Cancelled);
                 }
                 // The export draws on the window's device - a sibling of the
                 // monitor's compositor - not on a second device opened

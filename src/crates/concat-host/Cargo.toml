@@ -28,6 +28,8 @@ concat-studio.workspace = true
 # session flattens the scene into the timeline, and the tests build one.
 concat-scene.workspace = true
 concat-camera.workspace = true
+# The lanes every job that computes is handed to, sized to the machine.
+concat-sched.workspace = true
 # The effect cards: every picture package drawn by its own shader; see
 # cards.rs.
 concat-effects.workspace = true

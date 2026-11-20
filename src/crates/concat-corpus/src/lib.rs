@@ -24,9 +24,11 @@
 
 pub mod case;
 pub mod code;
+pub mod golden;
 pub mod media;
 pub mod report;
 mod run;
+pub mod sound;
 
 use std::path::{Path, PathBuf};
 

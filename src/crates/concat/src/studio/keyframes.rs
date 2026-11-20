@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Jareer Abdullah and Concat contributors
 //! Keyframes.
 
+use concat_core::Halt;
+
 use super::*;
 
 impl Studio {
@@ -1784,8 +1786,10 @@ impl Studio {
                         studio.request_preview();
                         studio.ensure_regions();
                     }
-                    Err(error) if error.contains("cancelled") => {}
-                    Err(error) => studio.notify(&tf("studio.smartBrush", &[&error]), true),
+                    Err(Halt::Cancelled) => {}
+                    Err(Halt::Failed(error)) => {
+                        studio.notify(&tf("studio.smartBrush", &[&error]), true);
+                    }
                 }
             },
         );
@@ -1931,13 +1935,7 @@ impl Studio {
                     RecentProjectData {
                         path: project.path.as_str().into(),
                         name: project.name.as_str().into(),
-                        detail: format!(
-                            "{} × {} · {}",
-                            project.width,
-                            project.height,
-                            rate_label(project.rate_num, project.rate_den)
-                        )
-                        .into(),
+                        frame: format!("{} × {}", project.width, project.height).into(),
                         // When it was last worked on, which is what a
                         // person means by recent; when it was last opened
                         // where the file keeps no time.
