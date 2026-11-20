@@ -138,19 +138,6 @@ fn default_shape_height() -> f64 {
     100.0
 }
 
-impl Default for ShapeData {
-    fn default() -> Self {
-        Self {
-            kind: ShapeKind::Rect,
-            width: 100.0,
-            height: 100.0,
-            fill: Some([1.0, 1.0, 1.0, 1.0]),
-            stroke: None,
-            stroke_width: 0.0,
-        }
-    }
-}
-
 impl ShapeData {
     /// 内容指纹（素材化缓存的文件名成分）：只取决定像素的字段。文本
     /// 形式刻意直白（Debug 枚举名 + 定点小数），稳定跨进程——调用方拿
@@ -652,9 +639,19 @@ impl Scene {
                 layer.transform.stretch_x,
                 layer.transform.stretch_y,
             ]) || bad([layer.in_frame, layer.duration_frames, layer.opacity])
-                // 图形定义同样进命令载体：一个 NaN 的形状尺寸/描边会把
-                // 素材化画成一张毒图。
-                || layer.shape.iter().any(|shape| bad([shape.width, shape.height, shape.stroke_width]))
+                // 图形定义同样进命令载体：一个 NaN 的形状尺寸/描边/颜色
+                // 会把素材化画成一张毒图，或让文档序列化出 null。
+                || layer.shape.iter().any(|shape| {
+                    bad([shape.width, shape.height, shape.stroke_width])
+                        || shape
+                            .fill
+                            .iter()
+                            .any(|rgba| bad(rgba.iter().map(|c| f64::from(*c))))
+                        || shape
+                            .stroke
+                            .iter()
+                            .any(|rgba| bad(rgba.iter().map(|c| f64::from(*c))))
+                })
         });
         camera_bad
             || layers_bad

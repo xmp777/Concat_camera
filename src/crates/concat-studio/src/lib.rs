@@ -271,7 +271,7 @@ fn scene_clips(
         if !layer.visible {
             continue; // hidden layers need no asset, and a missing one must not fail the scene
         }
-        let Ok(path) = layer_asset_path(layer, scene_dir, probes) else {
+        let Ok(path) = layer_asset_path(layer, scene_dir) else {
             continue; // 无素材也无形状：跳过（图形已素材化的走 PNG 路径）
         };
         let (media_width, media_height) = media_size(&path, probes)?;
@@ -359,7 +359,7 @@ fn scene_clips_at(
         let Some(plan) = plans.get(&layer.id) else {
             continue;
         };
-        let Ok(path) = layer_asset_path(layer, scene_dir, probes) else {
+        let Ok(path) = layer_asset_path(layer, scene_dir) else {
             continue;
         };
         let (media_width, media_height) = media_size(&path, probes)?;
@@ -508,7 +508,7 @@ pub fn expand_project_scenes(
                 if !layer.visible {
                     continue; // 不可见图层不需要素材，缺素材也不能毁掉整场
                 }
-                let Ok(path) = layer_asset_path(layer, project_dir, probes) else {
+                let Ok(path) = layer_asset_path(layer, project_dir) else {
                     continue; // 无素材也无形状：跳过
                 };
                 // 素材尺寸只影响合成器自己的适配；probe 一次进调用方的
@@ -687,9 +687,9 @@ fn resolve(scene_dir: &Path, asset: &str) -> PathBuf {
     }
 }
 
-/// FNV-1a（64 位）：图形素材缓存文件名的稳定指纹——std 的 DefaultHasher
-/// 带随机键，跨运行会变名，缓存就会堆积。
-fn fnv1a(text: &str) -> u64 {
+/// FNV-1a（64 位）：图形素材文件名的稳定指纹——std 的 DefaultHasher
+/// 带随机键，跨运行会变名，文件名就会漂移。
+pub fn fnv1a(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.bytes() {
         hash ^= u64::from(byte);
@@ -816,49 +816,28 @@ pub fn materialize_shape(
     }
 
     pixmap
-        .save_png(out)
-        .map_err(|error| format!("无法写出形状素材 {}：{error}", out.display()))
+        .save_png(&out.with_extension("tmp"))
+        .map_err(|error| format!("无法写出形状素材 {}：{error}", out.display()))?;
+    // 同一形状可能被预览与导出线程同时首次素材化：先写临时名再就位，
+    // 避免两个句柄交错出一张撕裂的 PNG 被存在性检查永久当真。
+    std::fs::rename(out.with_extension("tmp"), out).map_err(|error| {
+        let _ = std::fs::remove_file(out.with_extension("tmp"));
+        format!("无法就位形状素材 {}：{error}", out.display())
+    })
 }
 
-/// 一个图层的素材落盘路径：asset 直用；shape 图层素材化到工程
-/// `cache/scene-shapes/` 的指纹名 PNG（同一形状跨帧、跨预览与导出复用
-/// 同一份），并把已知尺寸预填进 probe 缓存。工程目录不可写时（MCP 的
-/// 场景可以只读——渲染产物归 output，形状的像素又由内容决定、重生成
-/// 零风险）退回临时目录：不跨会话复用，但结果相同。两者皆无（无素材
-/// 也无形状）返回错误，由调用方跳层。
+/// 一个图层的素材落盘路径：**只认 `asset`**。渲染/预览/展开路径在这
+/// 里零写盘——形状图层的 PNG 由受写校验保护的写入点（MCP
+/// `scene_add_layer`、编辑器保存）物化到 `assets/scene-shapes/` 并回填
+/// asset；"有 shape 无 asset"的图层在此跳层，绝不在渲染期写盘（沙箱
+/// 不变量：任何写都落在写根之内，见 concat-api 的书面约定）。probes
+/// 仍由调用方传入以缓存已存在素材的尺寸。
 fn layer_asset_path(
     layer: &SceneLayer,
     scene_dir: &Path,
-    probes: &mut HashMap<PathBuf, (u32, u32)>,
 ) -> Result<PathBuf, String> {
-    if let Some(asset) = layer.asset.as_ref() {
-        return Ok(resolve(scene_dir, asset));
-    }
-    let shape = layer.shape.as_ref().ok_or_else(|| "图层没有素材".to_owned())?;
-    let file_name = format!("{:016x}.png", fnv1a(&shape.cache_key()));
-    let preferred = scene_dir.join("cache").join("scene-shapes").join(&file_name);
-    let fallback = std::env::temp_dir()
-        .join("concat-scene-shapes")
-        .join(&file_name);
-    let file = [preferred, fallback]
-        .into_iter()
-        .find(|candidate| {
-            if candidate.exists() {
-                return true;
-            }
-            if let Some(parent) = candidate.parent()
-                && std::fs::create_dir_all(parent).is_ok()
-                && materialize_shape(shape, candidate).is_ok()
-            {
-                return true;
-            }
-            false
-        })
-        .ok_or_else(|| "形状素材无法写入（工程目录与临时目录都不可写）".to_owned())?;
-    let width = shape.width.round().clamp(1.0, 4096.0) as u32;
-    let height = shape.height.round().clamp(1.0, 4096.0) as u32;
-    probes.entry(file.clone()).or_insert((width, height));
-    Ok(file)
+    let asset = layer.asset.as_ref().ok_or_else(|| "图层没有素材".to_owned())?;
+    Ok(resolve(scene_dir, asset))
 }
 
 fn key(property: &str, at: f64, value: f64) -> Value {
@@ -1304,8 +1283,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 图形素材化的像素：矩形中心是填充色，四角是透明（圆角外的部分
-    /// 不画）；椭圆四角透明；line 的中缝有笔色。
+    /// 图形素材化的像素：矩形中心是填充色；椭圆四角透明、中心填色；
+    /// line 的中缝是笔色、上下透明。
     #[test]
     fn a_shape_materializes_to_the_pixels_it_names() {
         let dir =
@@ -1330,9 +1309,6 @@ mod tests {
         assert_eq!((w, h), (40, 20));
         let centre = decoded.get_pixel(w / 2, h / 2);
         assert_eq!(centre.0, [255, 0, 0, 255], "the fill colour in the middle");
-        let corner = decoded.get_pixel(0, 0);
-        assert_eq!(centre.0.len(), 4);
-        let _ = corner; // 四角透明断言在椭圆里做（矩形本就全覆盖）
 
         let ellipse = dir.join("ellipse.png");
         materialize_shape(
@@ -1352,22 +1328,47 @@ mod tests {
         assert_eq!(corner.0[3], 0, "an ellipse's corners stay transparent");
         let centre = decoded.get_pixel(decoded.width() / 2, decoded.height() / 2);
         assert_eq!(centre.0, [0, 255, 0, 255], "green in the middle");
+
+        let line = dir.join("line.png");
+        materialize_shape(
+            &concat_scene::ShapeData {
+                kind: concat_scene::ShapeKind::Line,
+                width: 40.0,
+                height: 20.0,
+                fill: None,
+                stroke: Some([0.0, 0.0, 1.0, 1.0]),
+                stroke_width: 4.0,
+            },
+            &line,
+        )
+        .expect("the line paints");
+        let decoded = image::open(&line).expect("reads back").into_rgba8();
+        let middle = decoded.get_pixel(decoded.width() / 2, decoded.height() / 2);
+        assert_eq!(middle.0, [0, 0, 255, 255], "the pen colour on the line");
+        let above = decoded.get_pixel(decoded.width() / 2, 2);
+        assert_eq!(above.0[3], 0, "the canvas above the line stays empty");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 展开接住了图形图层：无 asset 的 shape 层素材化到工程的
-    /// `cache/scene-shapes/`（文件名按形状内容指纹），clip 指向它，且
-    /// 第二次展开复用同一份（不再生成）。
+    /// 展开接住了图形图层：shape 层的 PNG 在受写校验保护的写入点
+    /// （MCP scene_add_layer / 编辑器保存）物化并回填 asset，展开路径
+    /// 自己零写盘——这里模拟"已素材化"的层（asset 指向真实 PNG），
+    /// 断言展开把它当普通图片接进时间线。
     #[test]
-    fn a_shape_layer_expands_through_a_materialized_png() {
+    fn a_shape_layer_with_a_materialized_asset_expands() {
         use concat_project::{Command, Editor};
+
+        let dir = std::env::temp_dir().join(format!("concat-studio-shape-x-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        write_asset(&dir, "pill.png");
 
         let mut scene = Scene::new("sc1", "图形", 4000.0, 2250.0, 1920, 1080);
         scene.layers.push(concat_scene::SceneLayer {
             id: "pill".into(),
             name: "胶囊".into(),
             kind: concat_scene::LayerKind::Shape,
-            asset: None,
+            asset: Some("pill.png".into()),
             shape: Some(concat_scene::ShapeData {
                 kind: concat_scene::ShapeKind::Rect,
                 width: 400.0,
@@ -1400,9 +1401,6 @@ mod tests {
             })
             .unwrap();
         let project = editor.project();
-        let dir = std::env::temp_dir().join(format!("concat-studio-shape-x-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
 
         let expanded = expand_project_scenes(project, &dir, &mut HashMap::new());
         let image_clips: Vec<_> = expanded
@@ -1415,26 +1413,15 @@ mod tests {
         let clip = image_clips[0];
         assert!(
             clip.media_id.starts_with("scn"),
-            "the generated PNG rides a synthetic media item"
+            "the shape's PNG rides a synthetic media item"
         );
         let media = expanded
             .media
             .iter()
             .find(|item| item.id == clip.media_id)
             .expect("the media item");
-        let png = std::path::Path::new(&media.path);
-        assert!(png.exists(), "the materialized PNG is on disk");
-        assert_eq!(expanded.media.iter().find(|item| item.id == clip.media_id).and_then(|item| item.width), Some(400));
-
-        // 第二次展开：同一形状命中同一份 PNG（按内容指纹命名）。
-        let expanded_again = expand_project_scenes(project, &dir, &mut HashMap::new());
-        let again = expanded_again
-            .media
-            .iter()
-            .find(|item| item.id == image_clips[0].media_id)
-            .map(|item| item.path.clone())
-            .unwrap_or_default();
-        assert_eq!(again, media.path, "the same shape reuses its PNG");
+        assert!(std::path::Path::new(&media.path).exists(), "the PNG is on disk");
+        assert_eq!(expanded.media.iter().find(|item| item.id == clip.media_id).and_then(|item| item.width), Some(1));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

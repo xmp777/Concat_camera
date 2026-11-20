@@ -1174,7 +1174,7 @@ fn scene_add_layer(
         return Err(scene_error(format!("unknown field `{unknown}`")));
     }
 
-    let layer = concat_scene::SceneLayer {
+    let mut layer = concat_scene::SceneLayer {
         id: id.clone(),
         name,
         kind,
@@ -1195,6 +1195,40 @@ fn scene_add_layer(
         z,
         expression,
     };
+    // A shape figure materializes now, inside the write that already owns
+    // the scene: the PNG lands in `assets/scene-shapes/` (beside the
+    // manifest, under the write roots this tool was handed) and the layer
+    // points at it, so the render and preview paths read a file like any
+    // other layer and write nothing of their own. The figure stays in
+    // `shape` as the source of truth for re-editing.
+    if layer.shape.is_some() {
+        let shapes_dir = std::path::Path::new(&path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("assets")
+            .join("scene-shapes");
+        std::fs::create_dir_all(&shapes_dir)
+            .map_err(|error| scene_error(format!("cannot create shape asset folder: {error}")))?;
+        let file_name = format!(
+            "{}-{:016x}.png",
+            layer.id,
+            concat_studio::fnv1a(&layer.shape.as_ref().expect("checked above").cache_key())
+        );
+        let png = shapes_dir.join(file_name);
+        if !png.exists() {
+            concat_studio::materialize_shape(
+                layer.shape.as_ref().expect("checked above"),
+                &png,
+            )
+            .map_err(scene_error)?;
+        }
+        layer.asset = Some(
+            png.strip_prefix(std::path::Path::new(&path).parent().unwrap_or_else(|| std::path::Path::new(".")))
+                .map_err(|_| scene_error("shape asset path escapes the project"))?
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
     if let Some(index) = scene.layers.iter().position(|layer| layer.id == id) {
         scene.layers[index] = layer;
     } else {
