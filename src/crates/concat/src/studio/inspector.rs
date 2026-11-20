@@ -22,9 +22,7 @@ impl Studio {
                         serde_json::from_value::<concat_scene::Scene>(value.clone()).ok()
                     })
             })
-            .unwrap_or_else(|| {
-                concat_scene::Scene::new("", "", 1920.0, 1080.0, 1920, 1080)
-            })
+            .unwrap_or_else(|| concat_scene::Scene::new("", "", 1920.0, 1080.0, 1920, 1080))
     }
 
     /// The scene camera's pose at the playhead mapped into `clip`, for the
@@ -227,7 +225,7 @@ impl Studio {
                 // The Camera tab's: `scene_camera_set` wrote the key and
                 // returned before the echo was borrowed, so none of these
                 // can be here - spelled so a new camera row fails loud.
-                | ClipField::CameraX
+                ClipField::CameraX
                 | ClipField::CameraY
                 | ClipField::CameraZoom
                 | ClipField::CameraRotation => {}

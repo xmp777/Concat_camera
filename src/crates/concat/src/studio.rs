@@ -3106,12 +3106,10 @@ impl Studio {
     /// every `apply_within` that carries a scene-camera command.
     pub(crate) fn scene_gesture_gate(&mut self) {
         let now = std::time::Instant::now();
-        let stale = self.scene_gesture_last.is_none_or(|last| {
-            now.duration_since(last) > std::time::Duration::from_millis(900)
-        });
-        if stale
-            && let Some(session) = self.session.as_mut()
-        {
+        let stale = self
+            .scene_gesture_last
+            .is_none_or(|last| now.duration_since(last) > std::time::Duration::from_millis(900));
+        if stale && let Some(session) = self.session.as_mut() {
             session.end_gesture();
         }
         self.scene_gesture_last = Some(now);
@@ -3154,7 +3152,8 @@ impl Studio {
 
     /// A window with nothing open: the launch screen, with the recents list
     /// read off disk.
-    pub fn new(host: Host) -> Self {        let prefs = Preferences::load(&host.dirs);
+    pub fn new(host: Host) -> Self {
+        let prefs = Preferences::load(&host.dirs);
         // The panels where the last session left them, while Settings says
         // to; a saved dock this build cannot read is the default instead.
         let saved = prefs.layout.as_ref().filter(|_| prefs.remembers_layout());

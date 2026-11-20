@@ -101,10 +101,10 @@ impl Default for ScenePane {
             state: None,
             in_flight: None,
             pending: None,
-        request_id: 0,
-        generation: 0,
-        dragging: false,
-    }
+            request_id: 0,
+            generation: 0,
+            dragging: false,
+        }
     }
 }
 
@@ -389,7 +389,11 @@ impl ScenePane {
             self.status = "Open a project first.".into();
             return;
         }
-        let scene = state.scene.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let scene = state
+            .scene
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
         let start = f64::from(studio.playhead);
         studio.apply(concat_project::Command::AddSceneClip {
             track_id: None,
@@ -405,7 +409,12 @@ impl ScenePane {
     /// scene's frame is its clip's local time, or, outside every clip,
     /// the nearest clip's boundary frame. A standalone scene (no clip of
     /// its own id) falls back to the playhead at its own rate, as before.
-    pub fn follow_playhead(&mut self, seconds: f32, coarse: bool, scene_clips: &[(String, f64, f64)]) {
+    pub fn follow_playhead(
+        &mut self,
+        seconds: f32,
+        coarse: bool,
+        scene_clips: &[(String, f64, f64)],
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -489,7 +498,13 @@ impl ScenePane {
                 if pane.in_flight.as_ref().map(|request| request.id) == Some(id) {
                     pane.in_flight = None;
                 }
-                if pane.generation == generation && (pane.frame - frame).abs() < 0.5 {
+                // A result paints whenever the pane is on the same scene
+                // generation — during playback the pane's frame has moved
+                // on, and dropping the picture for that is what froze the
+                // preview on the old frame. Only the *slider/frame* state
+                // is pinned to the requested frame, so scrubbing cannot be
+                // rewound by a late frame.
+                if pane.generation == generation {
                     match result {
                         Ok(picture) => {
                             let buffer =
@@ -499,7 +514,10 @@ impl ScenePane {
                                     picture.height,
                                 );
                             pane.image = slint::Image::from_rgba8(buffer);
-                            pane.status = format!("frame {:.0} / {}", frame, pane.max_frame).into();
+                            if (pane.frame - frame).abs() < 0.5 {
+                                pane.status =
+                                    format!("frame {:.0} / {}", frame, pane.max_frame).into();
+                            }
                         }
                         Err(error) => pane.status = error.into(),
                     }
@@ -540,9 +558,9 @@ fn scene_frame_at(clips: &[(f64, f64)], seconds: f64, fps: f64, max_frame: f64) 
     if clips.is_empty() {
         return (seconds * fps).floor().clamp(0.0, max_frame);
     }
-    let inside = clips.iter().find(|(start, duration)| {
-        seconds >= *start && seconds < *start + *duration
-    });
+    let inside = clips
+        .iter()
+        .find(|(start, duration)| seconds >= *start && seconds < *start + *duration);
     if let Some((start, _)) = inside {
         return ((seconds - start) * fps).floor().clamp(0.0, max_frame);
     }
@@ -687,8 +705,16 @@ mod tests {
         // its own length at the scene's rate (1s × 30fps), not the
         // scene's last frame - only a clip reaching the scene's end does.
         let clips = vec![(2.0, 1.0), (6.0, 1.0)];
-        assert_eq!(scene_frame_at(&clips, 4.4, fps, max), 30.0, "closer to the first clip's tail");
-        assert_eq!(scene_frame_at(&clips, 4.6, fps, max), 0.0, "closer to the second clip's head");
+        assert_eq!(
+            scene_frame_at(&clips, 4.4, fps, max),
+            30.0,
+            "closer to the first clip's tail"
+        );
+        assert_eq!(
+            scene_frame_at(&clips, 4.6, fps, max),
+            0.0,
+            "closer to the second clip's head"
+        );
         // A trimmed clip maps only its own window.
         let clips = vec![(0.0, 1.5)];
         assert_eq!(scene_frame_at(&clips, 1.4, fps, max), 42.0);

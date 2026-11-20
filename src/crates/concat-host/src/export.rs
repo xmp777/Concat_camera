@@ -95,8 +95,7 @@ pub fn request_for(
     // `scene_probes` is the caller's cache (the session's), so a previewed
     // scene does not re-read its assets here.
     let expanded = concat_studio::expand_project_scenes(project, project_dir, scene_probes);
-    let mut clips =
-        concat_export::flatten::flatten_timeline_in(&expanded, None, Some(project_dir));
+    let mut clips = concat_export::flatten::flatten_timeline_in(&expanded, None, Some(project_dir));
     clips.extend(titles);
     ExportRequest {
         output: spec.output.clone(),

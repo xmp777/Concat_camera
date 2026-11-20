@@ -1,10 +1,10 @@
-# Concat_camera 交接单（Phase 5：Scene 时间轴片段 + Inspector Camera）
+# Concat_camera 交接单（Phase 7：图形图层素材化）
 
-> 最后更新：2026-11-20
+> 最后更新：2026-11-21
 > 仓库：`G:\Projects\Concat_camera`（fork of `jub0t/Concat`，AGPL-3.0-or-later）
 > 远程：`origin` = `xmp777/Concat_camera`，`upstream` = `jub0t/Concat`
-> 当前：**Phase 5 完成——Scene 是时间轴片段（本地时间/拖拽入栈/Inspector Camera 区），预览与导出经同一展开产出相机正确的场景帧；两轮子代理审查 P0 全清；Windows-only，MSVC 基线**
-> **接手请先读 `docs/SOP.md` 与 `docs/CAMERA_DESIGN.md`；阶段详情见 `docs/handovers/2026-11-20-scene-clip-camera.md`。**
+> 当前：**Phase 6（渲染健壮性）+ Phase 7（图形图层素材化）完成；已合并上游 178eb64c（concat-doc/concat-sched）；Windows-only，MSVC 基线**
+> **接手请先读 `docs/SOP.md` 与 `docs/CAMERA_DESIGN.md`；阶段详情见 `docs/handovers/2026-11-20-scene-clip-camera.md`、`2026-11-20-phase6-render-robustness.md`、`2026-11-20-phase7-shape-materialization.md`。**
 
 ---
 

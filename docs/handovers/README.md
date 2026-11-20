@@ -13,3 +13,6 @@
 |---|---|---|---|
 | Phase 2/3：跟随/组合运镜 + 工程持久化 + MCP CRUD | 2026-11-19 | ✅ | `c2b2e85d` |
 | Phase 4：Slint 场景视口 + 编辑器 Scene 面板 | 2026-11-19 | ✅ 审查修复完成，回归通过 | `23de8eba` + `d643012d` |
+| Phase 5：Scene 时间轴片段 + Inspector Camera 区 | 2026-11-20 | ✅ 审查修复完成 | `bf18b1bf`（合并）|
+| Phase 6：渲染健壮性与性能 | 2026-11-20 | ✅ [REVIEW_PASSED] | `eff186c7` |
+| Phase 7：图形图层素材化 | 2026-11-21 | ✅ 三轮审查收敛 | `dcdaa9eb` + `bf18b1bf` |

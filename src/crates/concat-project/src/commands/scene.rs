@@ -41,8 +41,7 @@ pub(super) fn apply(
             scene,
             name,
         } => {
-            let duration =
-                (scene.duration_frames() / scene.fps()).max(super::MIN_CLIP_DURATION);
+            let duration = (scene.duration_frames() / scene.fps()).max(super::MIN_CLIP_DURATION);
             // The track resolves first: a command that errs must leave the
             // project untouched, and embedding the scene before a
             // `TrackGone` refusal would strand it in the document with no
@@ -59,16 +58,26 @@ pub(super) fn apply(
                 }
             }
             match read_scene(project) {
-                Ok(existing) if existing.id == scene.id => {}
-                Ok(_) => return Err(CommandError::SceneMismatch),
-                Err(CommandError::SceneGone) => {
-                    project.extra.insert(
-                        SCENE_KEY.into(),
-                        serde_json::to_value(&scene).map_err(|_| CommandError::SceneGone)?,
-                    );
+                // Same id: the carried scene is the newer edit of it (a
+                // standalone file re-inserted after more drawing), so the
+                // document takes it — silently playing the old pixels the
+                // caller just replaced would be the worse surprise.
+                Ok(existing) if existing.id == scene.id => {
+                    if existing == scene {
+                        return Ok(Outcome {
+                            created_id: None,
+                            applied: false,
+                        });
+                    }
                 }
+                Ok(_) => return Err(CommandError::SceneMismatch),
+                Err(CommandError::SceneGone) => {}
                 Err(error) => return Err(error),
             }
+            project.extra.insert(
+                SCENE_KEY.into(),
+                serde_json::to_value(&scene).map_err(|_| CommandError::SceneGone)?,
+            );
             let timeline = project.active_mut();
             let track_id = match track_id {
                 // Validated above against the same timeline.
@@ -141,8 +150,21 @@ pub(super) fn apply(
         }
         Command::RemoveSceneCameraKey { frame } => {
             let mut scene = read_scene(project)?;
+            // The last key carries the viewport every renderer reads the
+            // output frame from; taking it off would silently drop the
+            // scene back to a 1920×1080 default. Remove all-but-one is the
+            // caller clearing edits, and one key stays.
+            if scene.camera.keys.len() <= 1 {
+                return Ok(Outcome {
+                    created_id: None,
+                    applied: false,
+                });
+            }
             let before = scene.camera.keys.len();
-            scene.camera.keys.retain(|key| (key.frame - frame).abs() >= KEY_EPSILON);
+            scene
+                .camera
+                .keys
+                .retain(|key| (key.frame - frame).abs() >= KEY_EPSILON);
             if scene.camera.keys.len() == before {
                 return Ok(Outcome {
                     created_id: None,
@@ -331,10 +353,7 @@ mod tests {
         // the phantom edit the outcome contract guards against.
         assert!(editor.apply(key_zoom(45.0, Some(2.0))).unwrap().applied);
         assert!(
-            !editor
-                .apply(key_zoom(45.0, Some(2.0)))
-                .unwrap()
-                .applied,
+            !editor.apply(key_zoom(45.0, Some(2.0))).unwrap().applied,
             "the same pose again is not a step"
         );
     }

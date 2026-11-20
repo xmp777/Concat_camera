@@ -1126,14 +1126,21 @@ mod tests {
                 .map(|shape| shape.cache_key())
                 .unwrap_or_default()
         };
-        assert_eq!(key_of(&restored), key_of(&layer), "the key survives a round-trip");
+        assert_eq!(
+            key_of(&restored),
+            key_of(&layer),
+            "the key survives a round-trip"
+        );
 
         // 旧文档：没有 shape 字段的图层读作 None。
-        let old: SceneLayer = serde_json::from_str(
-            r#"{"id":"p","name":"图","kind":"shape","asset":null}"#,
-        )
-        .expect("an old shape layer reads");
+        let old: SceneLayer =
+            serde_json::from_str(r#"{"id":"p","name":"图","kind":"shape","asset":null}"#)
+                .expect("an old shape layer reads");
         assert_eq!(old.shape, None);
-        assert_ne!(key_of(&old), key_of(&layer), "the fingerprint follows the content");
+        assert_ne!(
+            key_of(&old),
+            key_of(&layer),
+            "the fingerprint follows the content"
+        );
     }
 }

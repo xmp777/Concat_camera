@@ -1201,6 +1201,10 @@ fn scene_add_layer(
     // points at it, so the render and preview paths read a file like any
     // other layer and write nothing of their own. The figure stays in
     // `shape` as the source of truth for re-editing.
+    //
+    // The file name is the content fingerprint alone - a layer id is
+    // user input and would let `..` or an absolute path walk the write
+    // out of the sandbox (a review-round-3 finding).
     if layer.shape.is_some() {
         let shapes_dir = std::path::Path::new(&path)
             .parent()
@@ -1210,24 +1214,15 @@ fn scene_add_layer(
         std::fs::create_dir_all(&shapes_dir)
             .map_err(|error| scene_error(format!("cannot create shape asset folder: {error}")))?;
         let file_name = format!(
-            "{}-{:016x}.png",
-            layer.id,
+            "{:016x}.png",
             concat_studio::fnv1a(&layer.shape.as_ref().expect("checked above").cache_key())
         );
-        let png = shapes_dir.join(file_name);
+        let png = shapes_dir.join(&file_name);
         if !png.exists() {
-            concat_studio::materialize_shape(
-                layer.shape.as_ref().expect("checked above"),
-                &png,
-            )
-            .map_err(scene_error)?;
+            concat_studio::materialize_shape(layer.shape.as_ref().expect("checked above"), &png)
+                .map_err(scene_error)?;
         }
-        layer.asset = Some(
-            png.strip_prefix(std::path::Path::new(&path).parent().unwrap_or_else(|| std::path::Path::new(".")))
-                .map_err(|_| scene_error("shape asset path escapes the project"))?
-                .to_string_lossy()
-                .into_owned(),
-        );
+        layer.asset = Some(format!("assets/scene-shapes/{file_name}"));
     }
     if let Some(index) = scene.layers.iter().position(|layer| layer.id == id) {
         scene.layers[index] = layer;

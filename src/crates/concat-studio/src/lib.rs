@@ -435,10 +435,11 @@ pub fn expand_project_scenes(
     // 给 ExportClip，合成器按它适配画面——None 会让展开图层渲染成空帧
     // （Phase 5 验收里"面板黑屏"的实质之一）。
     let media_id_for = |path: PathBuf,
-                            media: &mut Vec<concat_project::model::MediaItem>,
-                            ids: &mut HashMap<PathBuf, String>,
-                            seq: &mut usize,
-                            probes: &mut HashMap<PathBuf, (u32, u32)>| -> String {
+                        media: &mut Vec<concat_project::model::MediaItem>,
+                        ids: &mut HashMap<PathBuf, String>,
+                        seq: &mut usize,
+                        probes: &mut HashMap<PathBuf, (u32, u32)>|
+     -> String {
         ids.get(&path).cloned().unwrap_or_else(|| {
             // `scn` 前缀在 "m" 命名空间之外；即便工程里手工造过同名的
             // 素材项，也递增到没有碰撞为止——flatten 按首个 id 匹配。
@@ -478,8 +479,7 @@ pub fn expand_project_scenes(
         })
     };
 
-    let mut expanded_timelines: Vec<std::sync::Arc<concat_project::model::Timeline>> =
-        Vec::new();
+    let mut expanded_timelines: Vec<std::sync::Arc<concat_project::model::Timeline>> = Vec::new();
     for timeline in project.timelines.iter() {
         let mut tracks = timeline.tracks.clone();
         let mut clips: Vec<Clip> = Vec::new();
@@ -500,11 +500,18 @@ pub fn expand_project_scenes(
             let mut ordered: Vec<&SceneLayer> = scene.layers.iter().collect();
             ordered.sort_by_key(|layer| layer.z);
             // 合成器每条轨在同一时刻只认一个 clip（后者覆盖前者）——
-            // 场景的图层必须各占一条轨：最低 z 的一层留在场景片段的原
-            // 轨（背景轨语义随它走），其余每层在其上各 mint 一条新轨，
-            // 顺序与 z 一致。
+            // 场景的图层必须各占一条轨：**第一个实际产出片段的层**留在
+            // 场景片段的原轨（背景轨语义随它走；隐藏/缺素材的层不算），
+            // 其余每层在原轨之上各 mint 一条新轨，顺序与 z 一致。新轨
+            // 插在原轨之后、其余既有轨之前——场景层盖住它下面的剪辑，
+            // 但不盖住本来就摆在场景片段上方的字幕与特效。
+            let anchor_row = tracks
+                .iter()
+                .position(|track| track.id == clip.track_id)
+                .unwrap_or(tracks.len().saturating_sub(1));
+            let mut minted: usize = 0;
             let mut group: Vec<(String, Clip)> = Vec::new();
-            for (index, layer) in ordered.iter().enumerate() {
+            for layer in ordered.iter() {
                 if !layer.visible {
                     continue; // 不可见图层不需要素材，缺素材也不能毁掉整场
                 }
@@ -540,17 +547,22 @@ pub fn expand_project_scenes(
                 if samples.is_empty() {
                     continue;
                 }
-                let layer_track = if index == 0 {
+                let layer_track = if group.is_empty() {
                     clip.track_id.clone()
                 } else {
                     let id = format!("{}-{}-{}", clip.track_id, clip.id, layer.id);
                     if !tracks.iter().any(|track| track.id == id) {
-                        tracks.push(concat_project::model::Track {
-                            id: id.clone(),
-                            visible: true,
-                            muted: false,
-                            extra: Default::default(),
-                        });
+                        let row = anchor_row + minted + 1;
+                        tracks.insert(
+                            row.min(tracks.len()),
+                            concat_project::model::Track {
+                                id: id.clone(),
+                                visible: true,
+                                muted: false,
+                                extra: Default::default(),
+                            },
+                        );
+                        minted += 1;
                     }
                     id
                 };
@@ -562,13 +574,8 @@ pub fn expand_project_scenes(
                     clip.start + inter_start,
                     inter_end - inter_start,
                 );
-                out.media_id = media_id_for(
-                    path,
-                    &mut media,
-                    &mut media_ids,
-                    &mut media_seq,
-                    probes,
-                );
+                out.media_id =
+                    media_id_for(path, &mut media, &mut media_ids, &mut media_seq, probes);
                 out.opacity = layer.opacity;
                 // 展开片段保留场景归属：既标记来源（背景轨判定用它），
                 // 也不让展开产物在二次展开时被再次当作 Scene 片段。
@@ -702,10 +709,7 @@ pub fn fnv1a(text: &str) -> u64 {
 /// `out`。fill/stroke 都缺的图形是一张空图——"画了，但什么都没有"。
 /// 形状的像素取 `ShapeData` 的宽高（钳到 1..=4096）；世界摆位与相机
 /// 投影由图层 transform 承担，与图片图层完全同规。
-pub fn materialize_shape(
-    shape: &concat_scene::ShapeData,
-    out: &Path,
-) -> Result<(), String> {
+pub fn materialize_shape(shape: &concat_scene::ShapeData, out: &Path) -> Result<(), String> {
     use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke};
 
     let width = shape.width.round().clamp(1.0, 4096.0) as u32;
@@ -757,7 +761,10 @@ pub fn materialize_shape(
                     pixmap.stroke_path(
                         &path,
                         &stroke_paint,
-                        &Stroke { width: shape.stroke_width.max(1.0) as f32, ..Default::default() },
+                        &Stroke {
+                            width: shape.stroke_width.max(1.0) as f32,
+                            ..Default::default()
+                        },
                         tiny_skia::Transform::identity(),
                         None,
                     );
@@ -789,7 +796,10 @@ pub fn materialize_shape(
                     pixmap.stroke_path(
                         &path,
                         &stroke_paint,
-                        &Stroke { width: shape.stroke_width.max(1.0) as f32, ..Default::default() },
+                        &Stroke {
+                            width: shape.stroke_width.max(1.0) as f32,
+                            ..Default::default()
+                        },
                         tiny_skia::Transform::identity(),
                         None,
                     );
@@ -806,7 +816,10 @@ pub fn materialize_shape(
                     pixmap.stroke_path(
                         &path,
                         &stroke_paint,
-                        &Stroke { width: shape.stroke_width.max(1.0) as f32, ..Default::default() },
+                        &Stroke {
+                            width: shape.stroke_width.max(1.0) as f32,
+                            ..Default::default()
+                        },
                         tiny_skia::Transform::identity(),
                         None,
                     );
@@ -832,11 +845,11 @@ pub fn materialize_shape(
 /// asset；"有 shape 无 asset"的图层在此跳层，绝不在渲染期写盘（沙箱
 /// 不变量：任何写都落在写根之内，见 concat-api 的书面约定）。probes
 /// 仍由调用方传入以缓存已存在素材的尺寸。
-fn layer_asset_path(
-    layer: &SceneLayer,
-    scene_dir: &Path,
-) -> Result<PathBuf, String> {
-    let asset = layer.asset.as_ref().ok_or_else(|| "图层没有素材".to_owned())?;
+fn layer_asset_path(layer: &SceneLayer, scene_dir: &Path) -> Result<PathBuf, String> {
+    let asset = layer
+        .asset
+        .as_ref()
+        .ok_or_else(|| "图层没有素材".to_owned())?;
     Ok(resolve(scene_dir, asset))
 }
 
@@ -881,11 +894,11 @@ mod tests {
 
     /// 一张真实的 1×1 PNG：probe 与合成器都要能读它。
     const TINY_PNG: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
-        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
-        0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
-        0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
 
     fn write_asset(dir: &Path, name: &str) {
@@ -1085,7 +1098,10 @@ mod tests {
         let timeline = expanded.active();
         // 展开替换了 Scene 片段本身：flatten 对 Scene 失败软跳过，替换
         // 后那里就是真实的图像片段。
-        assert!(timeline.clip(&clip_id).is_none(), "the scene clip is consumed");
+        assert!(
+            timeline.clip(&clip_id).is_none(),
+            "the scene clip is consumed"
+        );
 
         let image_clips: Vec<_> = timeline
             .clips
@@ -1128,13 +1144,10 @@ mod tests {
             // 尺寸来自 probe（flatten 交给合成器适配画面）——None 会让
             // 展开图层渲染成空帧。
             assert!(
-                expanded
-                    .media
-                    .iter()
-                    .any(|item| item.id == clip.media_id
-                        && item.kind == concat_project::model::MediaKind::Image
-                        && item.width == Some(1)
-                        && item.height == Some(1)),
+                expanded.media.iter().any(|item| item.id == clip.media_id
+                    && item.kind == concat_project::model::MediaKind::Image
+                    && item.width == Some(1)
+                    && item.height == Some(1)),
                 "the synthetic media item exists with its probed size"
             );
             // 相机推近：scale 关键帧首尾不同（1/zoom 与 1/2zoom 的差异由
@@ -1234,7 +1247,8 @@ mod tests {
 
         let editor = Editor::new();
         let project = editor.project();
-        let expanded = expand_project_scenes(project, std::path::Path::new("."), &mut HashMap::new());
+        let expanded =
+            expand_project_scenes(project, std::path::Path::new("."), &mut HashMap::new());
         assert_eq!(expanded, *project);
     }
 
@@ -1287,8 +1301,7 @@ mod tests {
     /// line 的中缝是笔色、上下透明。
     #[test]
     fn a_shape_materializes_to_the_pixels_it_names() {
-        let dir =
-            std::env::temp_dir().join(format!("concat-studio-shape-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("concat-studio-shape-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let out = dir.join("rect.png");
@@ -1358,7 +1371,8 @@ mod tests {
     fn a_shape_layer_with_a_materialized_asset_expands() {
         use concat_project::{Command, Editor};
 
-        let dir = std::env::temp_dir().join(format!("concat-studio-shape-x-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("concat-studio-shape-x-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         write_asset(&dir, "pill.png");
@@ -1420,8 +1434,18 @@ mod tests {
             .iter()
             .find(|item| item.id == clip.media_id)
             .expect("the media item");
-        assert!(std::path::Path::new(&media.path).exists(), "the PNG is on disk");
-        assert_eq!(expanded.media.iter().find(|item| item.id == clip.media_id).and_then(|item| item.width), Some(1));
+        assert!(
+            std::path::Path::new(&media.path).exists(),
+            "the PNG is on disk"
+        );
+        assert_eq!(
+            expanded
+                .media
+                .iter()
+                .find(|item| item.id == clip.media_id)
+                .and_then(|item| item.width),
+            Some(1)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

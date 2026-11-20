@@ -223,15 +223,10 @@ impl Studio {
         let pane_scene = self.scene.scene_id();
         let timeline_has_own_clip = self.session.as_ref().is_some_and(|session| {
             pane_scene.is_some_and(|id| {
-                session
-                    .project()
-                    .active()
-                    .clips
-                    .iter()
-                    .any(|clip| {
-                        clip.kind == model::ClipKind::Scene
-                            && clip.scene_id.as_deref() == Some(id.as_str())
-                    })
+                session.project().active().clips.iter().any(|clip| {
+                    clip.kind == model::ClipKind::Scene
+                        && clip.scene_id.as_deref() == Some(id.as_str())
+                })
             })
         });
         let scene_seconds = self.scene.duration_seconds().unwrap_or(0.0);

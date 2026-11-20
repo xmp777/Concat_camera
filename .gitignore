@@ -69,3 +69,9 @@ setup-env.ps1
 
 # Audits are working notes for whoever runs them, not part of the source
 audit/
+
+# 运行期产物：编辑器视图状态与验证渲染（永不跟踪）
+examples/scene_demo/scene-demo/concat.lock
+examples/scene_demo/scene-demo/concat.opened.json
+examples/scene_demo/scene-demo/out*.mp4
+examples/scene_demo/scene-demo/frame_check.png

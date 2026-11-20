@@ -1221,20 +1221,20 @@ impl Studio {
         // from the project's scene; degrees for rotation, as the row shows
         // it - normalized to (-180, 180], the range the row clamps to. A
         // non-scene clip never pays for the scene parse.
-        let (camera_x, camera_y, camera_zoom, camera_rotation) = if clip.kind == model::ClipKind::Scene
-        {
-            let camera = self.scene_camera_pose_at(clip);
-            let deg = camera.rotation.to_degrees();
-            let deg = ((deg + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
-            (
-                camera.x as f32,
-                camera.y as f32,
-                camera.zoom as f32,
-                deg as f32,
-            )
-        } else {
-            (0.0, 0.0, 1.0, 0.0)
-        };
+        let (camera_x, camera_y, camera_zoom, camera_rotation) =
+            if clip.kind == model::ClipKind::Scene {
+                let camera = self.scene_camera_pose_at(clip);
+                let deg = camera.rotation.to_degrees();
+                let deg = ((deg + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+                (
+                    camera.x as f32,
+                    camera.y as f32,
+                    camera.zoom as f32,
+                    deg as f32,
+                )
+            } else {
+                (0.0, 0.0, 1.0, 0.0)
+            };
         let text = clip.text.clone().unwrap_or_default();
         // Where the family sits in the picker's list; none when nothing on
         // this machine has it, which the picker shows in red.

@@ -57,10 +57,7 @@ impl Studio {
             // `preview_clips` already returned without a session, so the
             // fallback map is a defensive branch that should not run.
             let mut fallback_probes = std::collections::HashMap::new();
-            let mut session_probes = self
-                .session
-                .as_ref()
-                .map(|session| session.scene_probes());
+            let mut session_probes = self.session.as_ref().map(|session| session.scene_probes());
             let expanded = concat_studio::expand_project_scenes(
                 self.project(),
                 &project_dir,
@@ -69,11 +66,8 @@ impl Studio {
                     .map_or(&mut fallback_probes, |guard| &mut **guard),
             );
             drop(session_probes);
-            let mut clips = concat_export::flatten::flatten_timeline_in(
-                &expanded,
-                None,
-                Some(&project_dir),
-            );
+            let mut clips =
+                concat_export::flatten::flatten_timeline_in(&expanded, None, Some(&project_dir));
             // Titles, painted to pictures and rejoined; see concat-host's titles.
             if self.echo.is_some() {
                 // A change in flight: the titles are painted in memory at

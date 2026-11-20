@@ -1404,9 +1404,7 @@ impl Command {
                 .into_iter()
                 .flatten()
                 .copied()),
-            Command::AddSceneClip { start, scene, .. } => {
-                bad([*start]) || scene.has_non_finite()
-            }
+            Command::AddSceneClip { start, scene, .. } => bad([*start]) || scene.has_non_finite(),
             Command::SetSceneCameraKey {
                 frame,
                 x,
@@ -1420,7 +1418,9 @@ impl Command {
                     || bad(y.iter().copied())
                     || bad(zoom.iter().copied())
                     || bad(rotation.iter().copied())
-                    || easing.iter().any(|ease| bad([ease.x1, ease.y1, ease.x2, ease.y2]))
+                    || easing
+                        .iter()
+                        .any(|ease| bad([ease.x1, ease.y1, ease.x2, ease.y2]))
             }
             Command::RemoveSceneCameraKey { frame } => bad([*frame]),
             _ => false,
