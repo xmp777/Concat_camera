@@ -3129,7 +3129,7 @@ impl Studio {
     /// command made elsewhere is on screen within one tick.
     pub(crate) fn scene_follow_playhead(&mut self, seconds: f32, coarse: bool) {
         self.sync_scene_pane();
-        let clips: Vec<(String, f64, f64)> = self
+        let clips: Vec<(String, f64, f64, f64, f64)> = self
             .session
             .as_ref()
             .map(|session| {
@@ -3140,9 +3140,15 @@ impl Studio {
                     .iter()
                     .filter(|clip| clip.kind == model::ClipKind::Scene)
                     .filter_map(|clip| {
-                        clip.scene_id
-                            .clone()
-                            .map(|id| (id, clip.start, clip.duration))
+                        clip.scene_id.clone().map(|id| {
+                            (
+                                id,
+                                clip.start,
+                                clip.duration,
+                                clip.source_start,
+                                clip.speed,
+                            )
+                        })
                     })
                     .collect()
             })

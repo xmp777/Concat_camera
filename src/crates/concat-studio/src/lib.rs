@@ -573,7 +573,14 @@ pub fn expand_project_scenes(
                 .map(|key| key.pose.viewport_height)
                 .unwrap_or(1080);
             let scene_end = clip_scene.duration_frames();
-            let window = clip.duration.max(0.0);
+            // trim/speed 语义：`source_start` 是用户裁头时定的场景本地
+            // 入点（秒）；`speed` 缩放场景时间相对时间轴的流速。窗口是
+            // 场景帧区间 [in, in + duration × speed × fps)。
+            let speed = clip.speed.max(0.01);
+            let source_frames = clip.source_start.max(0.0) * clip_fps;
+            let frames_per_sec = clip_fps * speed;
+            let window_frames = clip.duration.max(0.0) * frames_per_sec;
+            let window = (source_frames, source_frames + window_frames);
             let mut ordered: Vec<&SceneLayer> = clip_scene.layers.iter().collect();
             ordered.sort_by_key(|layer| layer.z);
             // 合成器每条轨在同一时刻只认一个 clip（后者覆盖前者）——
@@ -601,23 +608,28 @@ pub fn expand_project_scenes(
                 if media_size(&path, probes).is_err() {
                     continue; // 缺素材的图层与导出单场景一致：跳过而非失败
                 }
-                let layer_start = layer.in_frame.max(0.0) / clip_fps;
+                let layer_start = layer.in_frame.max(0.0);
                 let layer_frames = if layer.duration_frames > 0.0 {
                     layer.duration_frames
                 } else {
                     (scene_end - layer.in_frame.max(0.0)).max(1.0)
                 };
-                let layer_end = (layer.in_frame.max(0.0) + layer_frames) / clip_fps;
-                let inter_start = layer_start.min(window);
-                let inter_end = layer_end.min(window);
-                if inter_end - inter_start <= 0.0 {
+                let layer_end = layer.in_frame.max(0.0) + layer_frames;
+                // 图层的场景帧区间与片段窗口（场景帧）求交；交出的帧区间
+                // 再除以速度换回时间轴秒。
+                let inter_scene_start = layer_start.max(window.0);
+                let inter_scene_end = layer_end.min(window.1);
+                if inter_scene_end - inter_scene_start <= 0.0 {
                     continue;
                 }
+                let timeline_start =
+                    clip.start + (inter_scene_start - source_frames) / frames_per_sec;
+                let timeline_dur = (inter_scene_end - inter_scene_start) / frames_per_sec;
                 let samples = sample_layer(
                     &clip_scene,
                     layer,
-                    inter_start * clip_fps,
-                    (inter_end - inter_start) * clip_fps,
+                    inter_scene_start,
+                    inter_scene_end - inter_scene_start,
                     clip_width,
                     clip_height,
                 );
@@ -648,8 +660,8 @@ pub fn expand_project_scenes(
                     layer_track.clone(),
                     ClipKind::Image,
                     layer.name.clone(),
-                    clip.start + inter_start,
-                    inter_end - inter_start,
+                    timeline_start,
+                    timeline_dur,
                 );
                 out.media_id =
                     media_id_for(path, &mut media, &mut media_ids, &mut media_seq, probes);
@@ -1457,7 +1469,6 @@ mod tests {
     #[test]
     fn a_shape_layer_with_a_materialized_asset_expands() {
         use concat_project::{Command, Editor};
-
         let dir =
             std::env::temp_dir().join(format!("concat-studio-shape-x-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1532,6 +1543,93 @@ mod tests {
                 .find(|item| item.id == clip.media_id)
                 .and_then(|item| item.width),
             Some(1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// trim/speed 语义：`source_start` 偏移场景本地入点，`speed` 缩放
+    /// 场景时间相对时间轴的流速。2× 速度的 3 秒片段在时间轴上占 1.5
+    /// 秒，场景帧以 60fps 的速率流过。
+    #[test]
+    fn a_scene_clip_with_speed_maps_the_window_across_scene_frames() {
+        use concat_project::{Command, Editor};
+
+        let dir =
+            std::env::temp_dir().join(format!("concat-studio-speed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        write_asset(&dir, "bg.png");
+
+        let mut scene = Scene::new("sc1", "速度", 4000.0, 2250.0, 1920, 1080);
+        scene.layers.push(concat_scene::SceneLayer {
+            id: "bg".into(),
+            name: "背景".into(),
+            kind: concat_scene::LayerKind::Background,
+            asset: Some("bg.png".into()),
+            shape: None,
+            transform: concat_scene::SceneTransform {
+                x: 2000.0,
+                y: 1125.0,
+                ..Default::default()
+            },
+            in_frame: 0.0,
+            duration_frames: 0.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        });
+
+        let mut editor = Editor::new();
+        editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 0.0,
+                scene,
+                name: None,
+            })
+            .unwrap();
+        // 场景默认 90 帧 @30fps = 3 秒。裁到 1.5 秒时间轴（speed 1.0 时
+        // 本地窗口也是 1.5 秒），然后 SetClipSpeed 到 2×：同一时间轴窗
+        // 口现在流过 3 秒的场景帧。
+        let clip_id = editor.project().active().clips[0].id.clone();
+        editor
+            .apply(Command::TrimClip {
+                clip_id: clip_id.clone(),
+                edge: concat_project::commands::TrimEdge::End,
+                delta: -1.5,
+                ripple: false,
+            })
+            .unwrap();
+        editor
+            .apply(Command::SetClipSpeed {
+                clip_id: clip_id.clone(),
+                speed: 2.0,
+                ripple: false,
+            })
+            .unwrap();
+        let project = editor.project();
+
+        let expanded = expand_project_scenes(project, &dir, &mut HashMap::new());
+        let timeline = expanded.active();
+        let image_clips: Vec<_> = timeline
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == concat_project::model::ClipKind::Image)
+            .collect();
+        assert_eq!(image_clips.len(), 1, "单图层场景展开出一个图像片段");
+        // SetClipSpeed 2× 后片段时长减半：45 帧 @30fps ÷ 2 = 0.75 秒。
+        // 展开的图像片段时长与片段一致（不是场景的 3 秒）。
+        let clip = timeline
+            .clips
+            .iter()
+            .find(|clip| clip.scene_id.as_deref() == Some("sc1"))
+            .expect("the scene clip");
+        assert!((clip.duration - 0.75).abs() < 0.1, "2× speed halves the window");
+        assert!(
+            (image_clips[0].duration - clip.duration).abs() < 0.1,
+            "expansion covers exactly the clip's window"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

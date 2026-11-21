@@ -442,7 +442,7 @@ impl ScenePane {
         &mut self,
         seconds: f32,
         coarse: bool,
-        scene_clips: &[(String, f64, f64)],
+        scene_clips: &[(String, f64, f64, f64, f64)],
     ) {
         let Some(state) = self.state.clone() else {
             return;
@@ -452,10 +452,12 @@ impl ScenePane {
         // The last frame is an index, one below the frame count the
         // duration names - the same convention the slider's maximum has.
         let max = (scene.duration_frames() - 1.0).max(0.0);
-        let owned: Vec<(f64, f64)> = scene_clips
+        let owned: Vec<(f64, f64, f64, f64)> = scene_clips
             .iter()
-            .filter(|(id, _, _)| state.path.is_none() && *id == scene.id)
-            .map(|(_, start, duration)| (*start, *duration))
+            .filter(|(id, _, _, _, _)| state.path.is_none() && *id == scene.id)
+            .map(|(_, start, duration, source_start, speed)| {
+                (*start, *duration, *source_start, *speed)
+            })
             .collect();
         drop(scene);
         let frame = if owned.is_empty() {
@@ -580,24 +582,32 @@ fn scene_status(scene: &Scene) -> SharedString {
 }
 
 /// The scene frame the timeline shows at `seconds`, over the scene clips
-/// `(start, duration)` that play this scene: inside a clip, its local
-/// time; outside every one, the nearest clip's boundary frame. Empty
-/// `clips` falls back to the playhead as the scene's own clock.
-fn scene_frame_at(clips: &[(f64, f64)], seconds: f64, fps: f64, max_frame: f64) -> f64 {
+/// `(start, duration, source_start, speed)` that play this scene: inside a
+/// clip, its local time at the scene's own rate × speed, offset by the
+/// clip's in-point; outside every one, the nearest clip's boundary frame.
+/// Empty `clips` falls back to the playhead as the scene's own clock.
+fn scene_frame_at(
+    clips: &[(f64, f64, f64, f64)],
+    seconds: f64,
+    fps: f64,
+    max_frame: f64,
+) -> f64 {
     if clips.is_empty() {
         return (seconds * fps).floor().clamp(0.0, max_frame);
     }
     let inside = clips
         .iter()
-        .find(|(start, duration)| seconds >= *start && seconds < *start + *duration);
-    if let Some((start, _)) = inside {
-        return ((seconds - start) * fps).floor().clamp(0.0, max_frame);
+        .find(|(start, duration, ..)| seconds >= *start && seconds < *start + *duration);
+    if let Some((start, duration, source_start, speed)) = inside {
+        let rate = fps * speed.max(0.01);
+        let local = source_start * fps + (seconds - start) * rate;
+        return local.floor().clamp(0.0, max_frame);
     }
     // Nearest boundary, over all clips: the distance to a clip's span is
     // zero inside it and the gap to an edge outside.
     let nearest = clips
         .iter()
-        .min_by(|(a_start, a_duration), (b_start, b_duration)| {
+        .min_by(|(a_start, a_duration, ..), (b_start, b_duration, ..)| {
             let da = (seconds - a_start)
                 .abs()
                 .min((seconds - (a_start + a_duration)).abs());
@@ -607,13 +617,16 @@ fn scene_frame_at(clips: &[(f64, f64)], seconds: f64, fps: f64, max_frame: f64) 
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
     match nearest {
-        Some((start, duration)) => {
+        Some((start, duration, source_start, speed)) => {
             let head = (seconds - start).abs();
             let tail = (seconds - (start + duration)).abs();
+            let rate = fps * speed.max(0.01);
             if head <= tail {
-                0.0
+                (source_start * fps).floor().clamp(0.0, max_frame)
             } else {
-                (duration * fps).floor().clamp(0.0, max_frame)
+                ((source_start + duration * speed) * fps)
+                    .floor()
+                    .clamp(0.0, max_frame)
             }
         }
         None => 0.0,
@@ -722,7 +735,7 @@ mod tests {
         // the scene's duration names - as `follow_playhead` does.
         let max = 89.0;
         // One clip from 2s to 5s.
-        let clips = vec![(2.0, 3.0)];
+        let clips = vec![(2.0, 3.0, 0.0, 1.0)];
         assert_eq!(scene_frame_at(&clips, 2.0, fps, max), 0.0);
         assert_eq!(scene_frame_at(&clips, 3.5, fps, max), 45.0);
         assert_eq!(scene_frame_at(&clips, 4.99, fps, max), 89.0);
@@ -733,7 +746,7 @@ mod tests {
         // Two clips: nearest boundary wins. The first clip's tail frame is
         // its own length at the scene's rate (1s × 30fps), not the
         // scene's last frame - only a clip reaching the scene's end does.
-        let clips = vec![(2.0, 1.0), (6.0, 1.0)];
+        let clips = vec![(2.0, 1.0, 0.0, 1.0), (6.0, 1.0, 0.0, 1.0)];
         assert_eq!(
             scene_frame_at(&clips, 4.4, fps, max),
             30.0,
@@ -745,7 +758,7 @@ mod tests {
             "closer to the second clip's head"
         );
         // A trimmed clip maps only its own window.
-        let clips = vec![(0.0, 1.5)];
+        let clips = vec![(0.0, 1.5, 0.0, 1.0)];
         assert_eq!(scene_frame_at(&clips, 1.4, fps, max), 42.0);
         // No clip of this scene: the timeline is the scene's clock, as a
         // standalone scene always was - clamped to the last frame index.
