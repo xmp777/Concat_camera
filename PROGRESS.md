@@ -53,16 +53,20 @@
   - [x] 12.2 新发现缺口修复：形状 PNG 物化在场景文件旁、嵌入工程后预览/导出静默丢形状——`scene_to_timeline` 增 `carry_shape_assets`（ensure_writable 先行 + 精确指纹布局校验 + tmp+rename），沙箱边界经审查代理 18 种对抗输入实测无逃逸
   - [x] 12.3 测试补齐：studio map-hit/legacy 双测、project 同 id 不同值重插测、mcp 表驱动对抗单测、e2e 双场景走线（carry 断言 + map-hit 渲染时长断言 + 落空报错）
   - [x] 12.4 门禁：MCP 11 lib + 7 e2e；project 269 lib + 4 doc；studio 13 lib；host 182 lib；fmt 干净（host export 3 失败为预存在环境性问题，已验证 HEAD 同样失败）
+- [x] **Phase 13：编辑器插入路径形状物化 + legacy 镜像统一**（2026-11-21，1 轮审查通过 + P2 顺手修复，详见 `docs/handovers/2026-11-21-phase13-editor-carry.md`）
+  - [x] 13.1 搬运下沉 concat-studio（`carry_shape_assets`/`materialized_shape_file` 公共 API，MCP wrapper 只剩沙箱校验；真实复制测试逐字节/幂等/缺源三段）
+  - [x] 13.2 编辑器"插入时间轴"按钮接线：独立文件插入前搬运 PNG 进工程目录，失败进状态行中止；嵌入场景跳过
+  - [x] 13.3 legacy `scene` 镜像统一：AddSceneClip 移动 map 时总刷新镜像（对齐 write_scene；幂等早退不盲修外部陈旧镜像，注释写明）
+  - [x] 13.4 门禁：studio 15 lib；project 269 lib + 4 doc；MCP 11 lib + 7 e2e；editor 245 lib；fmt 干净
 
-## 当前队列（Phase 13 候选）
+## 当前队列（Phase 14 候选）
 
-- [ ] 编辑器"插入时间轴"按钮的形状资产物化（与 MCP carry 同语义）
-- [ ] 图片图层相对 asset 随嵌入迁移 / carry 源缺失 warning
-- [ ] expand 两类回退区分（clip 无 id 合理回退 vs id 落空跳过+日志）
-- [ ] legacy `scene` 镜像写路径统一（重插路径刷新镜像）
+- [ ] 图片图层相对 asset 随嵌入迁移 / carry 源缺失 warning 化
+- [ ] expand 两类回退区分（clip 无 id 合理回退 vs id 落空跳过+日志，需日志设施决策）
 - [ ] 跟随逐帧解析深化（图层关键帧轨道就绪后自动生效，见 Phase 9 交付）
 - [ ] parallax/plan_frame_with_camera 死管道处置（待架构评审）
+- [ ] 编辑器 UI：Scene 面板实机走查（13.2 接线后插入含形状场景的端到端确认）
 
 ## 卡点记录
 
-（无）——Phase 7 熔断已恢复，Phase 9/11/12 审查收敛。
+（无）——Phase 7 熔断已恢复，Phase 9/11/12/13 审查收敛。

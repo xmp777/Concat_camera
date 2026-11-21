@@ -1384,7 +1384,9 @@ fn scene_to_timeline(
 /// with its figures silently missing. Only fingerprint-named PNGs at
 /// exactly `assets/scene-shapes/<name>` beside the scene file are
 /// copied, and the project folder is write-root checked first, so
-/// nothing else can be smuggled into the project.
+/// nothing else can be smuggled into the project. The carrying itself
+/// (`concat_studio::carry_shape_assets`) is shared with the editor's
+/// insert button; this wrapper only adds the sandbox check.
 fn carry_shape_assets(
     scene: &concat_scene::Scene,
     scene_path: &std::path::Path,
@@ -1396,55 +1398,7 @@ fn carry_shape_assets(
     let scene_dir = scene_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    for layer in &scene.layers {
-        let (Some(_shape), Some(asset)) = (&layer.shape, &layer.asset) else {
-            continue;
-        };
-        let Some(file) = materialized_shape_file(asset) else {
-            continue;
-        };
-        let source = scene_dir.join(asset);
-        if !source.is_file() {
-            continue;
-        }
-        let target = project_dir.join("assets").join("scene-shapes").join(&file);
-        if target.exists() {
-            continue;
-        }
-        std::fs::create_dir_all(target.parent().expect("assets/scene-shapes"))
-            .map_err(|error| ApiError::failed(format!("cannot create shape folder: {error}")))?;
-        // Through a temp name first, like `materialize_shape` does: an
-        // interrupted copy must not leave a torn PNG that the
-        // existence check above would take at its word for ever.
-        let staged = target.with_extension("tmp");
-        std::fs::copy(&source, &staged)
-            .map_err(|error| ApiError::failed(format!("cannot carry {}: {error}", file)))?;
-        std::fs::rename(&staged, &target)
-            .map_err(|error| ApiError::failed(format!("cannot place {}: {error}", file)))?;
-    }
-    Ok(())
-}
-
-/// The `<fingerprint>.png` name of an asset that is exactly
-/// `assets/scene-shapes/<name>` - the layout `scene_add_layer` writes -
-/// and nothing else: no `..`, no absolute path, no subfolder, so a
-/// hand-edited scene file cannot walk the copy out of the sandbox.
-fn materialized_shape_file(asset: &str) -> Option<String> {
-    let mut parts = std::path::Path::new(asset).components();
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (
-            Some(std::path::Component::Normal(folder)),
-            Some(std::path::Component::Normal(kind)),
-            Some(std::path::Component::Normal(file)),
-            None,
-        ) if folder == "assets" && kind == "scene-shapes" => {
-            let name = file.to_str()?;
-            let stem = name.strip_suffix(".png")?;
-            (stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit()))
-                .then(|| name.to_owned())
-        }
-        _ => None,
-    }
+    concat_studio::carry_shape_assets(scene, scene_dir, project_dir).map_err(ApiError::failed)
 }
 
 fn scene_error(why: impl Into<String>) -> ApiError {
@@ -2225,38 +2179,16 @@ mod tests {
     /// The asset carry reads only what `scene_add_layer` writes: a
     /// fingerprint PNG at exactly `assets/scene-shapes/<name>`. Every
     /// other shape - walking out, absolute, renamed - is not carried.
+    /// The predicate itself lives in `concat-studio` and is tested there;
+    /// this line keeps the tool's dependency on that contract visible.
     #[test]
     fn the_asset_carry_takes_fingerprint_pngs_alone() {
-        let carried = "0123456789abcdef.png";
-        assert_eq!(
-            materialized_shape_file(&format!("assets/scene-shapes/{carried}")).as_deref(),
-            Some(carried),
-            "the layout scene_add_layer writes"
+        assert!(
+            concat_studio::materialized_shape_file("assets/scene-shapes/0123456789abcdef.png")
+                .is_some()
         );
-        // Windows separators name the same file on the same machine.
-        assert_eq!(
-            materialized_shape_file(&format!("assets\\scene-shapes\\{carried}")).as_deref(),
-            Some(carried),
-            "the same file, spelled with backslashes"
+        assert!(
+            concat_studio::materialized_shape_file("assets/scene-shapes/../../evil.png").is_none()
         );
-        for refused in [
-            "assets/scene-shapes/../../evil.png",
-            "assets/scene-shapes/sub/0123456789abcdef.png",
-            "assets/scene-shapes/notafingerprint.png",
-            "assets/scene-shapes/g123456789abcdef.png",
-            "assets/scene-shapes/0123456789abcdefg.png",
-            "assets/scene-shapes/0123456789abcde.png",
-            "assets/scene-shapes/0123456789abcde.txt",
-            "assets/scene-shapes/",
-            "scene-shapes/0123456789abcdef.png",
-            "hero.png",
-            "G:/elsewhere/0123456789abcdef.png",
-            "/assets/scene-shapes/0123456789abcdef.png",
-        ] {
-            assert!(
-                materialized_shape_file(refused).is_none(),
-                "{refused} must not be carried"
-            );
-        }
     }
 }

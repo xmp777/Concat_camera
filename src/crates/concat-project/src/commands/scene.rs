@@ -64,8 +64,11 @@ pub(super) fn apply(
             // The carried scene lands in the `scenes` map under its own
             // id — same id replaces (a standalone file re-inserted after
             // more drawing), a new id adds a second scene the map keeps.
-            // The legacy single-`scene` mirror stays pointed at the first
-            // entry so older readers keep opening the document.
+            // The legacy single-`scene` mirror follows the map's first
+            // entry whenever this arm moves the map, like `write_scene`
+            // refreshes it - the idempotent early-return below leaves a
+            // stale mirror from an older writer for the next real write
+            // to heal.
             {
                 let value = serde_json::to_value(&scene).map_err(|_| CommandError::SceneGone)?;
                 let existing = read_scene_value(project, Some(&scene.id));
@@ -87,10 +90,8 @@ pub(super) fn apply(
                 if let Value::Object(entries) = map {
                     entries.insert(scene.id.clone(), value);
                 }
-                if project.extra.get(SCENE_KEY).is_none() {
-                    if let Some(first) = read_first_scene_value(project) {
-                        project.extra.insert(SCENE_KEY.into(), first);
-                    }
+                if let Some(first) = read_first_scene_value(project) {
+                    project.extra.insert(SCENE_KEY.into(), first);
                 }
             }
             let timeline = project.active_mut();

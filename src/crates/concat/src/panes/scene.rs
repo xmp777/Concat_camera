@@ -423,6 +423,21 @@ impl ScenePane {
             .read()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
+        // A standalone file's shape PNGs live beside it; the project's
+        // render paths resolve assets against the project folder. Carry
+        // them across like the MCP insert tool does, or the placed scene
+        // would render with its figures silently missing. An embedded
+        // scene (no path) already lives in the project.
+        if state.path.is_some() {
+            let Some(folder) = studio.project_folder.as_deref() else {
+                self.status = "Open a project first.".into();
+                return;
+            };
+            if let Err(error) = concat_studio::carry_shape_assets(&scene, &state.dir, folder) {
+                self.status = error.into();
+                return;
+            }
+        }
         let start = f64::from(studio.playhead);
         studio.apply(concat_project::Command::AddSceneClip {
             track_id: None,

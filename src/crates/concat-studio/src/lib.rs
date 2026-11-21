@@ -861,6 +861,69 @@ pub fn materialize_shape(shape: &concat_scene::ShapeData, out: &Path) -> Result<
     })
 }
 
+/// 形状图层的素材落盘相对路径是否正是 `scene_add_layer` 写出的
+/// `assets/scene-shapes/<指纹>.png`——是则给出文件名，否则 None。其余
+/// 一律不认：`..`、绝对路径、子目录、任意文件名都过不去，手工改编的
+/// 场景文件无法让复制走出沙箱。
+pub fn materialized_shape_file(asset: &str) -> Option<String> {
+    let mut parts = std::path::Path::new(asset).components();
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (
+            Some(std::path::Component::Normal(folder)),
+            Some(std::path::Component::Normal(kind)),
+            Some(std::path::Component::Normal(file)),
+            None,
+        ) if folder == "assets" && kind == "scene-shapes" => {
+            let name = file.to_str()?;
+            let stem = name.strip_suffix(".png")?;
+            (stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit()))
+                .then(|| name.to_owned())
+        }
+        _ => None,
+    }
+}
+
+/// 场景的形状图层素材随嵌入迁移：场景文件旁物化的 PNG
+/// （`assets/scene-shapes/<指纹>.png` 相对路径）复制进工程目录——工程
+/// 侧渲染按工程目录解析素材，不带过去就会静默丢形状。MCP 的
+/// `scene_to_timeline` 与编辑器的"插入时间轴"按钮共用此搬运；写入的
+/// 许可（MCP 沙箱写根、编辑器本地信任）由调用方把关，这里只认指纹
+/// 命名的 PNG 并经临时名就位（与 `materialize_shape` 同法，撕裂文件
+/// 不会因存在性检查被永久当真）。源缺失或目标已存在则跳过：内容寻址
+/// 使同名即同内容。
+pub fn carry_shape_assets(
+    scene: &Scene,
+    scene_dir: &Path,
+    project_dir: &Path,
+) -> Result<(), String> {
+    for layer in &scene.layers {
+        let (Some(_shape), Some(asset)) = (&layer.shape, &layer.asset) else {
+            continue;
+        };
+        let Some(file) = materialized_shape_file(asset) else {
+            continue;
+        };
+        let source = scene_dir.join(asset);
+        if !source.is_file() {
+            continue;
+        }
+        let target = project_dir.join("assets").join("scene-shapes").join(&file);
+        if target.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(target.parent().expect("assets/scene-shapes"))
+            .map_err(|error| format!("无法建立形状素材目录：{error}"))?;
+        let staged = target.with_extension("tmp");
+        std::fs::copy(&source, &staged)
+            .map_err(|error| format!("无法搬运形状素材 {file}：{error}"))?;
+        std::fs::rename(&staged, &target).map_err(|error| {
+            let _ = std::fs::remove_file(&staged);
+            format!("无法就位形状素材 {file}：{error}")
+        })?;
+    }
+    Ok(())
+}
+
 /// rgba 0..=1 数组 → ShapeStyle 的 `#rrggbb[aa]` 字符串。
 fn rgba_to_hex(rgba: [f32; 4]) -> String {
     let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -1416,6 +1479,132 @@ mod tests {
         assert!(stretched_x.is_some(), "stretchX baked into the keys");
         assert!(stretched_y.is_some(), "stretchY baked too");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 素材搬运只认 `scene_add_layer` 写出的指纹命名：精确布局（含
+    /// Windows 反斜杠拼写）通过，`..`、子目录、非指纹名、错误后缀、
+    /// 绝对路径一律拒绝。
+    #[test]
+    fn the_asset_carry_takes_fingerprint_pngs_alone() {
+        let carried = "0123456789abcdef.png";
+        assert_eq!(
+            materialized_shape_file(&format!("assets/scene-shapes/{carried}")).as_deref(),
+            Some(carried),
+            "the layout scene_add_layer writes"
+        );
+        // Windows separators name the same file on the same machine.
+        assert_eq!(
+            materialized_shape_file(&format!("assets\\scene-shapes\\{carried}")).as_deref(),
+            Some(carried),
+            "the same file, spelled with backslashes"
+        );
+        for refused in [
+            "assets/scene-shapes/../../evil.png",
+            "assets/scene-shapes/sub/0123456789abcdef.png",
+            "assets/scene-shapes/notafingerprint.png",
+            "assets/scene-shapes/g123456789abcdef.png",
+            "assets/scene-shapes/0123456789abcdefg.png",
+            "assets/scene-shapes/0123456789abcde.png",
+            "assets/scene-shapes/0123456789abcde.txt",
+            "assets/scene-shapes/",
+            "scene-shapes/0123456789abcdef.png",
+            "hero.png",
+            "G:/elsewhere/0123456789abcdef.png",
+            "/assets/scene-shapes/0123456789abcdef.png",
+        ] {
+            assert!(
+                materialized_shape_file(refused).is_none(),
+                "{refused} must not be carried"
+            );
+        }
+    }
+
+    /// 搬运的真实复制：场景文件旁的指纹 PNG 进工程目录；缺源跳过、
+    /// 已有目标跳过、失败报错。
+    #[test]
+    fn carrying_moves_shape_pngs_beside_the_scene_into_the_project() {
+        let scratch =
+            std::env::temp_dir().join(format!("concat-studio-carry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch.join("scene")).unwrap();
+        std::fs::create_dir_all(&scratch.join("project")).unwrap();
+
+        let png = concat_text::render_shape(
+            &concat_text::ShapeStyle {
+                figure: concat_text::Figure::Square,
+                ..Default::default()
+            },
+            8,
+            8,
+        )
+        .expect("renders")
+        .png;
+        let fingerprint = format!("{:016x}.png", fnv1a("a-shape"));
+        std::fs::create_dir_all(scratch.join("scene").join("assets").join("scene-shapes")).unwrap();
+        std::fs::write(
+            scratch
+                .join("scene")
+                .join("assets")
+                .join("scene-shapes")
+                .join(&fingerprint),
+            &png,
+        )
+        .unwrap();
+
+        let layer = SceneLayer {
+            id: "fig".into(),
+            name: "图形".into(),
+            kind: concat_scene::LayerKind::Shape,
+            asset: Some(format!("assets/scene-shapes/{fingerprint}")),
+            shape: Some(concat_scene::ShapeData {
+                kind: concat_scene::ShapeKind::Rect,
+                width: 40.0,
+                height: 20.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 1.0,
+            }),
+            transform: concat_scene::SceneTransform::default(),
+            in_frame: 0.0,
+            duration_frames: 10.0,
+            opacity: 1.0,
+            visible: true,
+            z: 0,
+            expression: None,
+        };
+        let scene = Scene {
+            layers: vec![layer],
+            ..Scene::new("s", "搬运", 1000.0, 1000.0, 64, 64)
+        };
+
+        carry_shape_assets(&scene, &scratch.join("scene"), &scratch.join("project"))
+            .expect("carries");
+        let carried = scratch
+            .join("project")
+            .join("assets")
+            .join("scene-shapes")
+            .join(&fingerprint);
+        assert_eq!(
+            std::fs::read(&carried).expect("the carried png"),
+            png,
+            "byte for byte"
+        );
+
+        // 再搬一次是无操作（内容寻址，同名即同内容）。
+        std::fs::write(&carried, b"replaced").unwrap();
+        carry_shape_assets(&scene, &scratch.join("scene"), &scratch.join("project"))
+            .expect("idempotent");
+        assert_eq!(
+            std::fs::read(&carried).unwrap(),
+            b"replaced",
+            "an existing target is left alone"
+        );
+
+        // 源缺失静默跳过——报错留给调用方对整个嵌入的取舍。
+        let _ = std::fs::remove_dir_all(scratch.join("scene").join("assets"));
+        carry_shape_assets(&scene, &scratch.join("scene"), &scratch.join("project"))
+            .expect("missing source skips");
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// 图形素材化的像素：矩形中心是填充色；椭圆四角透明、中心填色；
