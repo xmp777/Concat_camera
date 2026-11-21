@@ -38,7 +38,10 @@
   - [x] materialize_shape 委托 render_shape（tiny-skia 依赖移除；与编辑器 shape 片段共用栅格化）
   - [x] plan_frame_with_camera 死管道确认（记录待架构评审处置）
   - [x] SCENE_KEY 双定义 / Easing 双轨确认并记录理由
-- [ ] Phase 10：MCP 场景片段工具 + 编辑器实机走查（多场景切换/shape 渲染/速度导出）
+- [x] **Phase 10：MCP sceneId 适配 + 编辑器实机走查**（2026-11-21，已推送 6d3e3e6e/18c795e6）
+  - [x] 10.1 `scene_render` 加 `sceneId` 参数（多场景文档按 id 渲染指定场景；schema 文档化）
+  - [x] 10.2 编辑器重建 + 实机走查：多场景切换/双金色片段/面板 Frame 0/90 同步正确（截图 `docs/assets/phase10_multiscene_walkthrough.png`）
+  - [x] 10.3 门禁：MCP 10 lib + 6 e2e 全绿，MSVC build 通过
 
 ## 卡点记录
 
