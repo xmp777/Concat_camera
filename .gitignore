@@ -75,3 +75,5 @@ examples/scene_demo/scene-demo/concat.lock
 examples/scene_demo/scene-demo/concat.opened.json
 examples/scene_demo/scene-demo/out*.mp4
 examples/scene_demo/scene-demo/frame_check.png
+*.log
+*_err*.log

@@ -598,7 +598,7 @@ fn scene_frame_at(
     let inside = clips
         .iter()
         .find(|(start, duration, ..)| seconds >= *start && seconds < *start + *duration);
-    if let Some((start, duration, source_start, speed)) = inside {
+    if let Some((start, _duration, source_start, speed)) = inside {
         let rate = fps * speed.max(0.01);
         let local = source_start * fps + (seconds - start) * rate;
         return local.floor().clamp(0.0, max_frame);
@@ -620,11 +620,10 @@ fn scene_frame_at(
         Some((start, duration, source_start, speed)) => {
             let head = (seconds - start).abs();
             let tail = (seconds - (start + duration)).abs();
-            let rate = fps * speed.max(0.01);
             if head <= tail {
                 (source_start * fps).floor().clamp(0.0, max_frame)
             } else {
-                ((source_start + duration * speed) * fps)
+                ((source_start + duration * speed.max(0.01)) * fps)
                     .floor()
                     .clamp(0.0, max_frame)
             }
@@ -763,5 +762,21 @@ mod tests {
         // No clip of this scene: the timeline is the scene's clock, as a
         // standalone scene always was - clamped to the last frame index.
         assert_eq!(scene_frame_at(&[], 5.0, fps, max), 89.0);
+
+        // A head-trimmed clip (source_start > 0): the in-point shifts the
+        // scene frame the clip's start shows — 0.5s into the scene is
+        // frame 15 at 30fps. At speed 2×, one timeline second advances 60
+        // scene frames from there.
+        let clips = vec![(0.0, 1.5, 0.5, 2.0)];
+        assert_eq!(
+            scene_frame_at(&clips, 0.0, fps, max),
+            15.0,
+            "head trim: the clip starts at the in-point's frame (0.5s × 30fps)"
+        );
+        assert_eq!(
+            scene_frame_at(&clips, 1.0, fps, max),
+            75.0,
+            "one second in at 2× speed advances 60 frames from the in-point"
+        );
     }
 }
