@@ -236,6 +236,21 @@ impl Studio {
                 && !timeline_has_own_clip
                 && timeline_seconds + 0.05 < scene_seconds,
         );
+        // The project's scene list: names for the selector's model, ids in
+        // the same order for the select callback to send back. Read from
+        // the pane's parsed list so the selector matches what the pane
+        // shows.
+        let available = self.scene.available_scenes();
+        let names: Vec<SharedString> = available
+            .iter()
+            .map(|(_, name)| SharedString::from(name.clone()))
+            .collect();
+        let ids: Vec<SharedString> = available
+            .iter()
+            .map(|(id, _)| SharedString::from(id.clone()))
+            .collect();
+        scene.set_scenes(slint::ModelRc::new(slint::VecModel::from(names)));
+        scene.set_scene_ids(slint::ModelRc::new(slint::VecModel::from(ids)));
     }
 
     /// The timeline and the readouts that follow it: what runs on every

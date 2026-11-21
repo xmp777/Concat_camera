@@ -24,6 +24,7 @@ use concat_camera::VirtualCamera;
 use concat_project::Project;
 use concat_scene::Scene;
 use concat_studio::{ScenePreviewer, load_scene, save_scene};
+use serde_json::Value;
 use slint::SharedString;
 
 use crate::host;
@@ -46,6 +47,8 @@ pub enum SceneMsg {
     Open,
     /// A scene file was picked.
     Opened(PathBuf),
+    /// A scene from the project's `scenes` map was picked by id.
+    Select(String),
     /// The frame slider moved (fallback when the timeline has no scene clip).
     Seek(f32),
     /// The picture was dragged, in fractions of the displayed picture.
@@ -82,6 +85,11 @@ pub struct ScenePane {
     pub frame: f32,
     pub max_frame: i32,
     pub status: SharedString,
+    /// The embedded scene the pane shows: `None` follows the document's
+    /// first scene (single-scene documents and the pre-Phase-8 shape).
+    selected_scene_id: Option<String>,
+    /// The project's scenes as `(id, name)`, for the pane's selector.
+    available_scenes: Vec<(String, String)>,
     state: Option<Arc<SceneState>>,
     in_flight: Option<InFlight>,
     pending: Option<(f32, bool)>,
@@ -98,6 +106,8 @@ impl Default for ScenePane {
             frame: 0.0,
             max_frame: 0,
             status: "Open a scene to preview it.".into(),
+            selected_scene_id: None,
+            available_scenes: Vec::new(),
             state: None,
             in_flight: None,
             pending: None,
@@ -125,6 +135,11 @@ impl ScenePane {
                 );
             }
             SceneMsg::Opened(path) => self.open(path, studio),
+            SceneMsg::Select(id) => {
+                // 切换到工程文档里 id 对应的场景；独立文件模式不变。
+                self.selected_scene_id = Some(id);
+                studio.sync_scene_pane();
+            }
             SceneMsg::Seek(frame) => {
                 self.dragging = false;
                 self.frame = frame.clamp(0.0, self.max_frame as f32);
@@ -176,6 +191,18 @@ impl ScenePane {
         let state = self.state.as_ref()?;
         let scene = state.scene.read().unwrap_or_else(|p| p.into_inner());
         Some(scene.duration_frames() / scene.fps())
+    }
+
+    /// The project's scenes as `(id, name)`, for the pane's selector.
+    pub fn available_scenes(&self) -> &[(String, String)] {
+        &self.available_scenes
+    }
+
+    /// The id of the scene the pane currently shows.
+    pub fn selected_scene_id(&self) -> Option<String> {
+        let state = self.state.as_ref()?;
+        let scene = state.scene.read().unwrap_or_else(|p| p.into_inner());
+        Some(scene.id.clone())
     }
 
     fn open(&mut self, path: PathBuf, studio: &Studio) {
@@ -245,10 +272,12 @@ impl ScenePane {
     /// opened is left alone; the frame is kept, clamped to the new
     /// length; nothing re-renders unless the scene actually changed.
     pub fn sync_from_project(&mut self, project: &Project, project_dir: &Path) {
-        let parsed = project
-            .extra
-            .get(concat_studio::SCENE_KEY)
-            .and_then(|value| serde_json::from_value::<Scene>(value.clone()).ok());
+        // 多场景容器：`scenes` map（按 id 存取）优先；旧文档的单-`scene`
+        // 字段作为回退——嵌入面板跟随选中的 id（默认第一个）。
+        let document = serde_json::to_value(project).unwrap_or(Value::Null);
+        let parsed =
+            concat_studio::read_scene_by_id(&document, self.selected_scene_id.as_deref()).ok();
+        self.available_scenes = concat_studio::list_scenes(&document);
         // `Some(false)` is a standalone file - the pane's own, which the
         // document never overwrites; `Some(true)` is the embedded mode
         // this sync drives.

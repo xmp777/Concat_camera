@@ -1,0 +1,24 @@
+warning: concat@0.2.12: warning: The property 'viewport-height' has been deprecated. Please use 'content-height' instead
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\primitives\modal.slint:248:17
+warning: concat@0.2.12:      |
+warning: concat@0.2.12:  248 |                 viewport-height: Math.max(self.height, content.preferred-height);
+warning: concat@0.2.12:      |                 ^^^^^^^^^^^^^^^
+warning: concat@0.2.12:      |
+warning: concat@0.2.12: warning: The property 'viewport-height' has been deprecated. Please use 'content-height' instead
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\primitives\modal.slint:252:38
+warning: concat@0.2.12:      |
+warning: concat@0.2.12:  252 |                     height: scroller.viewport-height;
+warning: concat@0.2.12:      |                                      ^^^^^^^^^^^^^^^
+warning: concat@0.2.12: warning: Component is neither used nor exported
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\start.slint:1397:1
+warning: concat@0.2.12:      |
+warning: concat@0.2.12: 1397 | / component TextLink inherits Pressable {
+warning: concat@0.2.12: 1398 | |     in property <string> text;
+warning: concat@0.2.12: 1399 | |
+warning: concat@0.2.12: 1400 | |     label: root.text;
+warning: concat@0.2.12: ...    |
+warning: concat@0.2.12: 1425 | | }
+warning: concat@0.2.12:      | |_^
+crates\concat\src\panes\scene.rs:197:12: warning: methods `available_scenes` and `selected_scene_id` are never used
+warning: `concat` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.78s

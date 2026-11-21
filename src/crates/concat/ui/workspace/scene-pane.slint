@@ -2,9 +2,10 @@
 // SPDX-FileCopyrightText: 2026 xmp777
 
 import { Button } from "std-widgets.slint";
+import { Select } from "../primitives/select.slint";
+import { Rail } from "../inspector/controls.slint";
 import { Pane, PaneHeader } from "pane.slint";
 import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
-import { Rail } from "../inspector/controls.slint";
 import { I18n } from "../i18n.slint";
 import { Theme } from "../theme/theme.slint";
 
@@ -16,12 +17,17 @@ export global SceneView {
     in-out property <bool> has-scene: false;
     in-out property <bool> show-frame-slider: true;
     in-out property <string> status: "";
+    /// 平行数组：显示名（ComboBox 的 model）与 id——选择时按下标发回。
+    in-out property <[string]> scenes;
+    in-out property <[string]> scene-ids;
+    in-out property <int> scene-index: 0;
     callback open();
     callback seek(float);
     callback drag-camera(float, float);
     callback drag-ended();
     callback save();
     callback add-to-timeline();
+    callback select-scene(string);
 }
 
 // A concat-scene frame with its camera under the pointer, in the workspace.
@@ -58,6 +64,18 @@ export component ScenePane inherits Pane {
                 Button {
                     text: I18n.t("scene.open");
                     clicked => { SceneView.open(); }
+                }
+                // 多场景容器：从工程 `scenes` map 里切到别的场景。
+                Select {
+                    options: SceneView.scenes;
+                    current <=> SceneView.scene-index;
+                    enabled: SceneView.scenes.length > 1;
+                    placeholder: I18n.t("scene.pick");
+                    changed(index) => {
+                        if (index >= 0 && index < SceneView.scene-ids.length) {
+                            SceneView.select-scene(SceneView.scene-ids[index]);
+                        }
+                    }
                 }
                 Button {
                     text: I18n.t("scene.addToTimeline");

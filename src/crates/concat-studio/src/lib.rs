@@ -31,6 +31,57 @@ pub fn load_scene(path: &Path) -> Result<Scene, String> {
     serde_json::from_value(scene).map_err(|error| format!("场景 JSON 无效：{error}"))
 }
 
+/// 从工程文档（或裸场景 JSON）按 id 读取一个场景。
+///
+/// 文档的 `scenes` map（Phase 8 的多场景容器）优先；未带 id 或 map 里
+/// 没有时回退到旧的单-`scene` 字段/裸场景。
+pub fn read_scene_by_id(document: &Value, scene_id: Option<&str>) -> Result<Scene, String> {
+    let from_map = || -> Option<&Value> {
+        document
+            .get("scenes")
+            .and_then(|value| value.as_object())
+            .and_then(|entries| scene_id.and_then(|id| entries.get(id)))
+    };
+    let legacy = || document.get(SCENE_KEY);
+    let value = match from_map().or_else(legacy) {
+        Some(value) => value.clone(),
+        None if scene_id.is_none() => document.clone(),
+        None => return Err(format!("文档中没有 id 为 {scene_id:?} 的场景")),
+    };
+    serde_json::from_value(value).map_err(|error| format!("场景 JSON 无效：{error}"))
+}
+
+/// 列出工程文档 `scenes` map 里的全部场景 `(id, name)`；单-`scene`
+/// 文档返回它的一个条目。
+pub fn list_scenes(document: &Value) -> Vec<(String, String)> {
+    let from_map = document
+        .get("scenes")
+        .and_then(|value| value.as_object())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(id, scene)| {
+                    scene
+                        .get("name")
+                        .and_then(|name| name.as_str())
+                        .map(|name| (id.clone(), name.to_owned()))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !from_map.is_empty() {
+        return from_map;
+    }
+    document
+        .get(SCENE_KEY)
+        .and_then(|scene| {
+            let id = scene.get("id")?.as_str()?.to_owned();
+            let name = scene.get("name")?.as_str()?.to_owned();
+            Some(vec![(id, name)])
+        })
+        .unwrap_or_default()
+}
+
 /// 把场景写回场景文件。
 ///
 /// 已有 Concat 工程文档会保留其余字段，只替换 `scene`；裸场景或新文件会

@@ -1366,6 +1366,9 @@ fn start(project: Option<std::path::PathBuf>, smoke: Smoke) -> Result<(), slint:
     scene.on_add_to_timeline(on_scene!(|state| {
         state.handle(Msg::Scene(SceneMsg::AddToTimeline));
     }));
+    scene.on_select_scene(on_scene!(|state, id: SharedString| {
+        state.handle(Msg::Scene(SceneMsg::Select(id.to_string())));
+    }));
     editor.on_clip_dragged(on_lanes!(|state, seconds: f32, pixels: f32| {
         state.clip_dragged(seconds, pixels);
     }));

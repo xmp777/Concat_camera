@@ -1,0 +1,91 @@
+warning: concat@0.2.12: warning: The property 'viewport-height' has been deprecated. Please use 'content-height' instead
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\primitives\modal.slint:248:17
+warning: concat@0.2.12:      |
+warning: concat@0.2.12:  248 |                 viewport-height: Math.max(self.height, content.preferred-height);
+warning: concat@0.2.12:      |                 ^^^^^^^^^^^^^^^
+warning: concat@0.2.12:      |
+warning: concat@0.2.12: warning: The property 'viewport-height' has been deprecated. Please use 'content-height' instead
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\primitives\modal.slint:252:38
+warning: concat@0.2.12:      |
+warning: concat@0.2.12:  252 |                     height: scroller.viewport-height;
+warning: concat@0.2.12:      |                                      ^^^^^^^^^^^^^^^
+warning: concat@0.2.12: warning: Component is neither used nor exported
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\start.slint:1397:1
+warning: concat@0.2.12:      |
+warning: concat@0.2.12: 1397 | / component TextLink inherits Pressable {
+warning: concat@0.2.12: 1398 | |     in property <string> text;
+warning: concat@0.2.12: 1399 | |
+warning: concat@0.2.12: 1400 | |     label: root.text;
+warning: concat@0.2.12: ...    |
+warning: concat@0.2.12: 1425 | | }
+warning: concat@0.2.12:      | |_^
+    Checking concat v0.2.12 (G:\Projects\Concat_camera\src\crates\concat)
+error[E0283]: type annotations needed
+   --> crates\concat\src\studio\publish.rs:262:62
+    |
+262 |         scene.set_scenes(ModelRc::from(VecModel::from(names).into()));
+    |                          -------                             ^^^^
+    |                          |
+    |                          type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `slint::ModelRc<slint::SharedString>: From<_>` found in the following crates: `core`, `i_slint_core`:
+            - impl<T, M> From<std::rc::Rc<M>> for slint::ModelRc<T>
+              where <M as slint::Model>::Data == T, M: slint::Model, M: 'static;
+            - impl<T, N> From<[T; N]> for slint::ModelRc<T>
+              where the constant `N` has type `usize`, T: std::clone::Clone, T: 'static;
+            - impl<T> From<&[T]> for slint::ModelRc<T>
+              where T: std::clone::Clone, T: 'static;
+            - impl<T> From<T> for T;
+            - impl<T> From<std::rc::Rc<(dyn slint::Model<Data = T> + 'static)>> for slint::ModelRc<T>;
+help: try using a fully qualified path to specify the expected types
+    |
+262 -         scene.set_scenes(ModelRc::from(VecModel::from(names).into()));
+262 +         scene.set_scenes(ModelRc::from(<slint::VecModel<slint::SharedString> as Into<T>>::into(VecModel::from(names))));
+    |
+
+error[E0283]: type annotations needed
+   --> crates\concat\src\studio\publish.rs:263:63
+    |
+263 |         scene.set_scene_ids(ModelRc::from(VecModel::from(ids).into()));
+    |                             -------                           ^^^^
+    |                             |
+    |                             type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `slint::ModelRc<slint::SharedString>: From<_>` found in the following crates: `core`, `i_slint_core`:
+            - impl<T, M> From<std::rc::Rc<M>> for slint::ModelRc<T>
+              where <M as slint::Model>::Data == T, M: slint::Model, M: 'static;
+            - impl<T, N> From<[T; N]> for slint::ModelRc<T>
+              where the constant `N` has type `usize`, T: std::clone::Clone, T: 'static;
+            - impl<T> From<&[T]> for slint::ModelRc<T>
+              where T: std::clone::Clone, T: 'static;
+            - impl<T> From<T> for T;
+            - impl<T> From<std::rc::Rc<(dyn slint::Model<Data = T> + 'static)>> for slint::ModelRc<T>;
+help: try using a fully qualified path to specify the expected types
+    |
+263 -         scene.set_scene_ids(ModelRc::from(VecModel::from(ids).into()));
+263 +         scene.set_scene_ids(ModelRc::from(<slint::VecModel<slint::SharedString> as Into<T>>::into(VecModel::from(ids))));
+    |
+
+For more information about this error, try `rustc --explain E0283`.
+warning: concat@0.2.12: warning: The property 'viewport-height' has been deprecated. Please use 'content-height' instead
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\primitives\modal.slint:248:17
+warning: concat@0.2.12:      |
+warning: concat@0.2.12:  248 |                 viewport-height: Math.max(self.height, content.preferred-height);
+warning: concat@0.2.12:      |                 ^^^^^^^^^^^^^^^
+warning: concat@0.2.12:      |
+warning: concat@0.2.12: warning: The property 'viewport-height' has been deprecated. Please use 'content-height' instead
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\primitives\modal.slint:252:38
+warning: concat@0.2.12:      |
+warning: concat@0.2.12:  252 |                     height: scroller.viewport-height;
+warning: concat@0.2.12:      |                                      ^^^^^^^^^^^^^^^
+warning: concat@0.2.12: warning: Component is neither used nor exported
+warning: concat@0.2.12:     --> G:\Projects\Concat_camera\src\crates\concat\ui\start.slint:1397:1
+warning: concat@0.2.12:      |
+warning: concat@0.2.12: 1397 | / component TextLink inherits Pressable {
+warning: concat@0.2.12: 1398 | |     in property <string> text;
+warning: concat@0.2.12: 1399 | |
+warning: concat@0.2.12: 1400 | |     label: root.text;
+warning: concat@0.2.12: ...    |
+warning: concat@0.2.12: 1425 | | }
+warning: concat@0.2.12:      | |_^
+error: could not compile `concat` (lib) due to 2 previous errors
