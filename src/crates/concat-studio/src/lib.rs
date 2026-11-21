@@ -17,6 +17,9 @@ use serde_json::{Value, json};
 /// Concat 工程文档中存放 2D 场景的顶层字段。
 pub const SCENE_KEY: &str = "scene";
 
+/// 多场景容器：文档顶层按场景 id 存取的 map（Phase 8）。
+pub const SCENES_KEY: &str = "scenes";
+
 /// 读取场景文件。
 ///
 /// 兼容两种格式：
@@ -33,22 +36,53 @@ pub fn load_scene(path: &Path) -> Result<Scene, String> {
 
 /// 从工程文档（或裸场景 JSON）按 id 读取一个场景。
 ///
-/// 文档的 `scenes` map（Phase 8 的多场景容器）优先；未带 id 或 map 里
-/// 没有时回退到旧的单-`scene` 字段/裸场景。
+/// - `Some(id)`：文档带 `scenes` map（Phase 8 的多场景容器）时**必须**
+///   在 map 里命中——落空即报错，不再静默回退旧的单-`scene` 字段（放置
+///   是有副作用的操作，拼错的 id 拿到错误的场景比拿到报错更糟）；无 map
+///   的旧文档回退单-`scene` 字段，但场景 id 必须与请求的一致。
+/// - `None`：map 存在取第一条（serde_json 的对象按 id 字典序，取最小），
+///   否则单-`scene` 字段，否则按裸场景解析。
 pub fn read_scene_by_id(document: &Value, scene_id: Option<&str>) -> Result<Scene, String> {
-    let from_map = || -> Option<&Value> {
-        document
-            .get("scenes")
-            .and_then(|value| value.as_object())
-            .and_then(|entries| scene_id.and_then(|id| entries.get(id)))
+    let parse = |value: &Value| {
+        serde_json::from_value::<Scene>(value.clone())
+            .map_err(|error| format!("场景 JSON 无效：{error}"))
     };
-    let legacy = || document.get(SCENE_KEY);
-    let value = match from_map().or_else(legacy) {
-        Some(value) => value.clone(),
-        None if scene_id.is_none() => document.clone(),
-        None => return Err(format!("文档中没有 id 为 {scene_id:?} 的场景")),
-    };
-    serde_json::from_value(value).map_err(|error| format!("场景 JSON 无效：{error}"))
+    let entries = document.get(SCENES_KEY).and_then(|value| value.as_object());
+    match (scene_id, entries) {
+        // The map answers for named scenes - and only the map: a miss
+        // names the error rather than quietly reading another scene.
+        (Some(id), Some(entries)) => {
+            let value = entries
+                .get(id)
+                .ok_or_else(|| format!("文档中没有 id 为 {id:?} 的场景"))?;
+            parse(value)
+        }
+        // No map: the legacy single-scene field, and the id must agree.
+        (Some(id), None) => {
+            let scene = document
+                .get(SCENE_KEY)
+                .ok_or_else(|| format!("文档中没有 id 为 {id:?} 的场景"))
+                .and_then(parse)?;
+            if scene.id != id {
+                return Err(format!("文档中没有 id 为 {id:?} 的场景"));
+            }
+            Ok(scene)
+        }
+        // Unnamed: the map's first entry, else the legacy field, else
+        // the whole document as a bare scene.
+        (None, Some(entries)) => entries
+            .values()
+            .next()
+            .ok_or_else(|| "文档的 scenes map 为空".to_owned())
+            .and_then(parse),
+        (None, None) => {
+            let value = document
+                .get(SCENE_KEY)
+                .cloned()
+                .unwrap_or_else(|| document.clone());
+            parse(&value)
+        }
+    }
 }
 
 /// 列出工程文档 `scenes` map 里的全部场景 `(id, name)`；单-`scene`
@@ -475,7 +509,7 @@ pub fn expand_project_scenes(
     let parse = |value: &Value| serde_json::from_value::<Scene>(value.clone()).ok();
     let scenes_map: HashMap<String, Scene> = project
         .extra
-        .get("scenes")
+        .get(SCENES_KEY)
         .and_then(|value| value.as_object())
         .map(|entries| {
             entries
@@ -988,6 +1022,60 @@ mod tests {
         assert_eq!(load_scene(&path).expect("reads again"), scene);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// `read_scene_by_id` 的多场景语义：命中的 id 从 map 读，map 里
+    /// 落空的 id 报错（不静默回退旧字段），没点名时取 map 第一条。
+    #[test]
+    fn a_named_scene_id_answers_from_the_scenes_map_or_errs() {
+        let first = Scene::new("sc1", "第一幕", 4000.0, 2250.0, 640, 360);
+        let second = Scene::new("sc2", "第二幕", 4000.0, 2250.0, 640, 360);
+        let document = json!({
+            "concat": "x",
+            "scenes": {
+                "sc2": serde_json::to_value(&second).unwrap(),
+                "sc1": serde_json::to_value(&first).unwrap(),
+            },
+            // 旧字段指向第一幕：map 命中的读取不该看它一眼。
+            "scene": serde_json::to_value(&second).unwrap(),
+        });
+
+        let named = read_scene_by_id(&document, Some("sc1")).expect("the map answers for sc1");
+        assert_eq!(
+            named.name, "第一幕",
+            "read from the map, not the legacy field"
+        );
+        assert_eq!(
+            read_scene_by_id(&document, Some("sc2"))
+                .expect("the map answers for sc2")
+                .name,
+            "第二幕"
+        );
+        let why = read_scene_by_id(&document, Some("sc3")).expect_err("a miss names the miss");
+        assert!(why.contains("sc3"), "{why}");
+
+        // 没点名：map 第一条，按 id 字典序（serde_json 对象有序）。
+        let unnamed = read_scene_by_id(&document, None).expect("the first entry");
+        assert_eq!(unnamed.id, "sc1");
+    }
+
+    /// 无 map 的旧文档按单-`scene` 字段读：点名的 id 必须与它一致。
+    #[test]
+    fn a_legacy_document_agrees_with_the_requested_id() {
+        let scene = Scene::new("dialogue", "双人对话", 4000.0, 2250.0, 640, 360);
+        let document = json!({
+            "concat": "x",
+            "scene": serde_json::to_value(&scene).unwrap(),
+        });
+        let read = read_scene_by_id(&document, Some("dialogue")).expect("the id agrees");
+        assert_eq!(read.id, "dialogue");
+        let why = read_scene_by_id(&document, Some("other")).expect_err("a wrong id errs");
+        assert!(why.contains("other"), "{why}");
+        let unnamed = read_scene_by_id(&document, None).expect("unnamed reads the field");
+        assert_eq!(unnamed.id, "dialogue");
+        // 裸场景 JSON：没点名按整份文档解析。
+        let bare = serde_json::to_value(&scene).unwrap();
+        assert_eq!(read_scene_by_id(&bare, None).expect("bare").id, "dialogue");
     }
 
     #[test]

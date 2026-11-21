@@ -543,7 +543,7 @@ pub fn catalogue() -> Vec<Tool> {
         Tool {
             name: "scene_to_timeline",
             title: "Put a scene on the timeline",
-            description: "Places a 2D scene as a clip on the open project's timeline: reads the scene at `scenePath` (`sceneId` picks among a multi-scene document's scenes), embeds it into the project document, and places a scene clip at `start` seconds (or the first free track). The scene plays over the clip's span; the camera, layers and render all come from the scene file. Requires a project to be open.",
+            description: "Places a 2D scene as a clip on the open project's timeline: reads the scene at `scenePath` (`sceneId` picks among a multi-scene document's scenes), embeds it into the project document, and places a scene clip at `start` seconds (or the first free track). The scene's materialized shape PNGs are carried into the project folder so the placed clip renders with its figures. The scene plays over the clip's span; the camera, layers and render all come from the scene file. Requires a project to be open.",
             read_only: false,
             destructive: false,
             idempotent: false,
@@ -983,7 +983,7 @@ fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, A
         Action::SceneCameraMove => scene_camera_move(arguments, &roots),
         Action::SceneGet => scene_get(arguments),
         Action::SceneToTimeline => {
-            let request = scene_to_timeline(arguments)?;
+            let request = scene_to_timeline(arguments, &roots)?;
             let result = backend.call(request)?;
             Ok(Outcome::json(summary::view(&result)))
         }
@@ -1330,11 +1330,15 @@ fn scene_get(mut arguments: Value) -> Result<Outcome, ApiError> {
 }
 
 /// `scene_to_timeline`: reads the scene (by `sceneId` when the file is a
-/// multi-scene document), builds an `AddSceneClip` request for the open
+/// multi-scene document), carries the scene's shape PNGs into the
+/// project folder, builds an `AddSceneClip` request for the open
 /// project, and returns it for `backend.call` to route through the
 /// command stack — the same path the editor's own "insert into timeline"
 /// button takes.
-fn scene_to_timeline(mut arguments: Value) -> Result<Request, ApiError> {
+fn scene_to_timeline(
+    mut arguments: Value,
+    roots: &[std::path::PathBuf],
+) -> Result<Request, ApiError> {
     let fields = arguments
         .as_object_mut()
         .ok_or_else(|| scene_error("the arguments are an object"))?;
@@ -1356,6 +1360,7 @@ fn scene_to_timeline(mut arguments: Value) -> Result<Request, ApiError> {
     .map_err(|error| scene_error(format!("场景 JSON 无效：{error}")))?;
     let scene =
         concat_studio::read_scene_by_id(&document, scene_id.as_deref()).map_err(scene_error)?;
+    carry_shape_assets(&scene, std::path::Path::new(&scene_path), &path, roots)?;
     request(
         "edit.apply",
         json!({
@@ -1369,6 +1374,77 @@ fn scene_to_timeline(mut arguments: Value) -> Result<Request, ApiError> {
             },
         }),
     )
+}
+
+/// The scene's shape layers name their materialized PNGs relative to the
+/// scene file (`assets/scene-shapes/<fingerprint>.png`, Phase 7), while
+/// the project's render paths resolve that against the project folder.
+/// The embed carries the files across: the tool is a write point for the
+/// project anyway, and without the copy the placed scene would render
+/// with its figures silently missing. Only fingerprint-named PNGs at
+/// exactly `assets/scene-shapes/<name>` beside the scene file are
+/// copied, and the project folder is write-root checked first, so
+/// nothing else can be smuggled into the project.
+fn carry_shape_assets(
+    scene: &concat_scene::Scene,
+    scene_path: &std::path::Path,
+    project_path: &str,
+    roots: &[std::path::PathBuf],
+) -> Result<(), ApiError> {
+    let project_dir = std::path::Path::new(project_path);
+    ensure_writable(project_dir, roots)?;
+    let scene_dir = scene_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    for layer in &scene.layers {
+        let (Some(_shape), Some(asset)) = (&layer.shape, &layer.asset) else {
+            continue;
+        };
+        let Some(file) = materialized_shape_file(asset) else {
+            continue;
+        };
+        let source = scene_dir.join(asset);
+        if !source.is_file() {
+            continue;
+        }
+        let target = project_dir.join("assets").join("scene-shapes").join(&file);
+        if target.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(target.parent().expect("assets/scene-shapes"))
+            .map_err(|error| ApiError::failed(format!("cannot create shape folder: {error}")))?;
+        // Through a temp name first, like `materialize_shape` does: an
+        // interrupted copy must not leave a torn PNG that the
+        // existence check above would take at its word for ever.
+        let staged = target.with_extension("tmp");
+        std::fs::copy(&source, &staged)
+            .map_err(|error| ApiError::failed(format!("cannot carry {}: {error}", file)))?;
+        std::fs::rename(&staged, &target)
+            .map_err(|error| ApiError::failed(format!("cannot place {}: {error}", file)))?;
+    }
+    Ok(())
+}
+
+/// The `<fingerprint>.png` name of an asset that is exactly
+/// `assets/scene-shapes/<name>` - the layout `scene_add_layer` writes -
+/// and nothing else: no `..`, no absolute path, no subfolder, so a
+/// hand-edited scene file cannot walk the copy out of the sandbox.
+fn materialized_shape_file(asset: &str) -> Option<String> {
+    let mut parts = std::path::Path::new(asset).components();
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (
+            Some(std::path::Component::Normal(folder)),
+            Some(std::path::Component::Normal(kind)),
+            Some(std::path::Component::Normal(file)),
+            None,
+        ) if folder == "assets" && kind == "scene-shapes" => {
+            let name = file.to_str()?;
+            let stem = name.strip_suffix(".png")?;
+            (stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit()))
+                .then(|| name.to_owned())
+        }
+        _ => None,
+    }
 }
 
 fn scene_error(why: impl Into<String>) -> ApiError {
@@ -2144,5 +2220,43 @@ mod tests {
             captions(json!({ "path": "/p", "captions": [{ "start": 2, "end": 1, "text": "x" }] }))
                 .is_err()
         );
+    }
+
+    /// The asset carry reads only what `scene_add_layer` writes: a
+    /// fingerprint PNG at exactly `assets/scene-shapes/<name>`. Every
+    /// other shape - walking out, absolute, renamed - is not carried.
+    #[test]
+    fn the_asset_carry_takes_fingerprint_pngs_alone() {
+        let carried = "0123456789abcdef.png";
+        assert_eq!(
+            materialized_shape_file(&format!("assets/scene-shapes/{carried}")).as_deref(),
+            Some(carried),
+            "the layout scene_add_layer writes"
+        );
+        // Windows separators name the same file on the same machine.
+        assert_eq!(
+            materialized_shape_file(&format!("assets\\scene-shapes\\{carried}")).as_deref(),
+            Some(carried),
+            "the same file, spelled with backslashes"
+        );
+        for refused in [
+            "assets/scene-shapes/../../evil.png",
+            "assets/scene-shapes/sub/0123456789abcdef.png",
+            "assets/scene-shapes/notafingerprint.png",
+            "assets/scene-shapes/g123456789abcdef.png",
+            "assets/scene-shapes/0123456789abcdefg.png",
+            "assets/scene-shapes/0123456789abcde.png",
+            "assets/scene-shapes/0123456789abcde.txt",
+            "assets/scene-shapes/",
+            "scene-shapes/0123456789abcdef.png",
+            "hero.png",
+            "G:/elsewhere/0123456789abcdef.png",
+            "/assets/scene-shapes/0123456789abcdef.png",
+        ] {
+            assert!(
+                materialized_shape_file(refused).is_none(),
+                "{refused} must not be carried"
+            );
+        }
     }
 }

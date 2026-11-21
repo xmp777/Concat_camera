@@ -48,15 +48,21 @@
   - [x] 11.3 自查 P0：`scene_render` 的 `sceneId` 因参数检查顺序从未可用（Phase 10 引入、无 e2e）——take 前移 + e2e 补断言
   - [x] 11.4 环境：LLVM_HOME 接通 MSYS2 clang（Skia/编辑器构建恢复）；Skia m153 源码预解包绕开符号链接特权限制
   - [x] 11.5 门禁：MCP 10 lib + 7 e2e；project 268 lib + 4 doc；workspace check（除 editor/android）+ `cargo check -p concat`（Skia 全量）通过；fmt 干净
+- [x] **Phase 12：scenes map 读取迁移 + 形状资产随嵌入迁移**（2026-11-21，2 轮审查收敛，详见 `docs/handovers/2026-11-21-phase12-scenes-map-migration.md`）
+  - [x] 12.1 `read_scene_by_id` 收紧：显式 id 在 map 落空改报错（原静默回退 legacy 键）；无 map 的 legacy 文档 id 必须一致；None 取 map 字典序首条
+  - [x] 12.2 新发现缺口修复：形状 PNG 物化在场景文件旁、嵌入工程后预览/导出静默丢形状——`scene_to_timeline` 增 `carry_shape_assets`（ensure_writable 先行 + 精确指纹布局校验 + tmp+rename），沙箱边界经审查代理 18 种对抗输入实测无逃逸
+  - [x] 12.3 测试补齐：studio map-hit/legacy 双测、project 同 id 不同值重插测、mcp 表驱动对抗单测、e2e 双场景走线（carry 断言 + map-hit 渲染时长断言 + 落空报错）
+  - [x] 12.4 门禁：MCP 11 lib + 7 e2e；project 269 lib + 4 doc；studio 13 lib；host 182 lib；fmt 干净（host export 3 失败为预存在环境性问题，已验证 HEAD 同样失败）
 
-## 当前队列（Phase 12 候选）
+## 当前队列（Phase 13 候选）
 
-- [ ] `scenes` map 读取迁移：编辑器/studio 全面走 map（旧 `scene` 单键仅作兼容）
-- [ ] sceneId 显式 id map 落空的静默回退：改报错或维持文档注明（Phase 11 审查遗留）
-- [ ] `read_scene_by_id` map-hit 路径直接测试（双场景文档）；同 id 不同值重插路径补测
+- [ ] 编辑器"插入时间轴"按钮的形状资产物化（与 MCP carry 同语义）
+- [ ] 图片图层相对 asset 随嵌入迁移 / carry 源缺失 warning
+- [ ] expand 两类回退区分（clip 无 id 合理回退 vs id 落空跳过+日志）
+- [ ] legacy `scene` 镜像写路径统一（重插路径刷新镜像）
 - [ ] 跟随逐帧解析深化（图层关键帧轨道就绪后自动生效，见 Phase 9 交付）
 - [ ] parallax/plan_frame_with_camera 死管道处置（待架构评审）
 
 ## 卡点记录
 
-（无）——Phase 7 熔断已恢复，Phase 9/11 审查收敛。
+（无）——Phase 7 熔断已恢复，Phase 9/11/12 审查收敛。

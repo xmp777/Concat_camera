@@ -484,6 +484,46 @@ mod tests {
         assert_eq!(editor.project().active().clips.len(), 1);
     }
 
+    /// The same id with changed content is an edit: the map entry moves
+    /// to the new value and a fresh clip carries it (the agent dropped
+    /// its scene file again after more drawing). The earlier clip keeps
+    /// its id - it plays the same scene id, whose content is the new one.
+    #[test]
+    fn re_inserting_a_changed_scene_updates_the_map_and_adds_a_clip() {
+        let (mut editor, first_id, scene) = editor_with_scene();
+        let mut changed = scene.clone();
+        changed.name = "改过的场景".into();
+        let mut key = scene.camera.keys[0].clone();
+        key.frame = 30.0;
+        changed.camera.keys.push(key);
+        let second = editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 0.0,
+                scene: changed.clone(),
+                name: None,
+            })
+            .unwrap();
+        assert!(second.applied, "different content is an edit");
+        let second_id = second.created_id.clone().unwrap();
+        assert_ne!(second_id, first_id, "a fresh clip for the new insert");
+        assert_eq!(editor.project().active().clips.len(), 2);
+        let project = editor.project();
+        let stored = project
+            .extra
+            .get(SCENES_KEY)
+            .and_then(|value| value.as_object())
+            .and_then(|entries| entries.get("sc1"))
+            .expect("the map entry");
+        let stored: concat_scene::Scene = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(stored.name, "改过的场景", "the map moved to the new value");
+        // Both clips bind to the same scene id - the map entry they play.
+        for clip in &project.active().clips {
+            assert_eq!(clip.scene_id.as_deref(), Some("sc1"));
+        }
+    }
+
     /// A camera key comes off at the frame it was put on, and taking one
     /// off where none is changes nothing.
     #[test]

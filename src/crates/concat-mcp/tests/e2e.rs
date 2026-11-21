@@ -845,6 +845,120 @@ fn an_agent_places_a_saved_scene_on_the_timeline_headless() {
     );
     assert!(output.is_file(), "the sceneId render wrote the file");
 
+    // A second scene joins the map, the way two clips carry two scenes:
+    // placed without an id it lands whole, and the project document's
+    // `scenes` map then answers for it by id - the render reads the
+    // second scene, not the mirror of the first.
+    let other_path = home.join("second.json");
+    agent.tool(
+        "scene_create",
+        json!({
+            "scenePath": other_path.to_string_lossy(),
+            "name": "第二场",
+            "worldWidth": 2000.0,
+            "worldHeight": 1125.0,
+            "width": 640,
+            "height": 360,
+            "fps": 30,
+            "durationFrames": 90,
+            "background": [0.0, 0.0, 0.0, 1.0],
+        }),
+    );
+    agent.tool(
+        "scene_add_layer",
+        json!({
+            "scenePath": other_path.to_string_lossy(),
+            "id": "backdrop",
+            "kind": "shape",
+            "shape": {
+                "kind": "ellipse",
+                "width": 500.0,
+                "height": 500.0,
+                "fill": [0.2, 0.4, 0.9, 1.0],
+            },
+            "x": 1000.0,
+            "y": 562.0,
+            "durationFrames": 90.0,
+        }),
+    );
+    let placed_second = agent.tool(
+        "scene_to_timeline",
+        json!({
+            "path": path,
+            "scenePath": other_path.to_string_lossy(),
+        }),
+    );
+    assert!(
+        placed_second["structuredContent"]["createdId"].is_string(),
+        "{placed_second}"
+    );
+    let read = agent.tool("timeline_read", json!({ "path": path }));
+    let clips = read["structuredContent"]["timeline"]["clips"]
+        .as_array()
+        .expect("clips");
+    assert_eq!(clips.len(), 2, "two scenes, two clips: {read}");
+
+    // The document on disk is the saved state - the edits live in the
+    // session until the save.
+    agent.tool("project_save", json!({ "path": path }));
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(home.join("Scene Cut").join("concat.json"))
+            .expect("the project document"),
+    )
+    .expect("valid JSON");
+    let (second_id, shape_asset) = document["scenes"]
+        .as_object()
+        .expect("scenes map")
+        .iter()
+        .find(|(_, scene)| scene["name"] == "第二场")
+        .map(|(id, scene)| {
+            let asset = scene["layers"][0]["asset"]
+                .as_str()
+                .expect("the shape layer's carried asset")
+                .to_owned();
+            (id.to_owned(), asset)
+        })
+        .expect("the second scene in the map");
+    // The embed carried the materialized PNG across: without it the
+    // placed scene would render with its figure silently missing.
+    let carried = home.join("Scene Cut").join(&shape_asset);
+    assert!(
+        carried.is_file(),
+        "the shape PNG rides with the embed: {shape_asset}"
+    );
+    let second_output = home.join("second.mp4");
+    agent.tool(
+        "scene_render",
+        json!({
+            "scenePath": home.join("Scene Cut").join("concat.json").to_string_lossy(),
+            "sceneId": second_id,
+            "output": second_output.to_string_lossy(),
+            "crf": 30,
+            "preset": "ultrafast",
+        }),
+    );
+    assert!(second_output.is_file(), "the map-hit render wrote the file");
+    let info = concat_media::probe(&second_output).expect("probes");
+    let duration = info.duration.expect("a duration").as_f64();
+    assert!(
+        (duration - 3.0).abs() < 0.3,
+        "the second scene's own 90 frames, not the first's 45: {duration}"
+    );
+
+    // A name the map lacks is an error, not somebody else's scene.
+    let (_, missed) = agent.ask(
+        "tools/call",
+        json!({
+            "name": "scene_to_timeline",
+            "arguments": {
+                "path": path,
+                "scenePath": home.join("Scene Cut").join("concat.json").to_string_lossy(),
+                "sceneId": "sc-nowhere",
+            },
+        }),
+    );
+    assert_eq!(missed["result"]["isError"], true, "{missed}");
+
     // Arguments outside the schema are named, like the other tools.
     let (_, refused) = agent.ask(
         "tools/call",
