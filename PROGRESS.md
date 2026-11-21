@@ -34,7 +34,12 @@
   - [x] 9.1 展开窗口改为场景帧区间（source_start×fps 起，speed 缩放流速）；面板映射同公式（4 元组）
   - [x] 9.2 跟随逐帧确认：相机键烘焙已按帧采样 plan_layers，目标图层逐帧解算结构成立
   - [x] 9.3 外部审查 W1/W2/W3 修复：判别性 head-trim/speed 测试、死变量清理、日志 untrack
+- [x] **严格审查：重复造轮子/绕弯路盘点**（2026-11-21，已推送 b74364f4）
+  - [x] materialize_shape 委托 render_shape（tiny-skia 依赖移除；与编辑器 shape 片段共用栅格化）
+  - [x] plan_frame_with_camera 死管道确认（记录待架构评审处置）
+  - [x] SCENE_KEY 双定义 / Easing 双轨确认并记录理由
+- [ ] Phase 10：MCP 场景片段工具 + 编辑器实机走查（多场景切换/shape 渲染/速度导出）
 
 ## 卡点记录
 
-（无）——2026-11-21 的 Phase 7 熔断已通过外部审计并入第 4 轮修复恢复。
+（无）——Phase 7 熔断已恢复，Phase 9 严格审查 [REVIEW_PASSED]。
