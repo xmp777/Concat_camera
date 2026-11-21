@@ -586,12 +586,7 @@ fn scene_status(scene: &Scene) -> SharedString {
 /// clip, its local time at the scene's own rate × speed, offset by the
 /// clip's in-point; outside every one, the nearest clip's boundary frame.
 /// Empty `clips` falls back to the playhead as the scene's own clock.
-fn scene_frame_at(
-    clips: &[(f64, f64, f64, f64)],
-    seconds: f64,
-    fps: f64,
-    max_frame: f64,
-) -> f64 {
+fn scene_frame_at(clips: &[(f64, f64, f64, f64)], seconds: f64, fps: f64, max_frame: f64) -> f64 {
     if clips.is_empty() {
         return (seconds * fps).floor().clamp(0.0, max_frame);
     }

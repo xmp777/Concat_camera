@@ -804,138 +804,72 @@ pub fn fnv1a(text: &str) -> u64 {
     hash
 }
 
-/// 把图形图层画成 PNG（RGBA，预乘由 tiny-skia 的 PNG 写出还原），写入
-/// `out`。fill/stroke 都缺的图形是一张空图——"画了，但什么都没有"。
+/// 把图形图层画成 PNG 并写入 `out`。渲染委托给 Concat 自己的
+/// `concat_text::render_shape`（与编辑器 shape 片段共用同一套栅格化
+/// 路径），这里只做 `ShapeData → ShapeStyle` 的薄转换。
+/// fill/stroke 都缺的图形是一张空图——"画了，但什么都没有"。
 /// 形状的像素取 `ShapeData` 的宽高（钳到 1..=4096）；世界摆位与相机
 /// 投影由图层 transform 承担，与图片图层完全同规。
 pub fn materialize_shape(shape: &concat_scene::ShapeData, out: &Path) -> Result<(), String> {
-    use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke};
-
     let width = shape.width.round().clamp(1.0, 4096.0) as u32;
     let height = shape.height.round().clamp(1.0, 4096.0) as u32;
-    let mut pixmap = Pixmap::new(width, height).ok_or_else(|| "形状尺寸无效".to_owned())?;
-    pixmap.fill(Color::TRANSPARENT);
-    let paint = |rgba: Option<[f32; 4]>| -> Option<Paint<'static>> {
-        rgba.and_then(|[r, g, b, a]| Color::from_rgba(r, g, b, a))
-            .map(|colour| {
-                let mut paint = Paint::default();
-                // 纯色的入口是 set_color；Shader 只服务渐变（见
-                // concat-text 的 shape.rs）。
-                paint.set_color(colour);
-                paint.anti_alias = true;
-                paint
-            })
-    };
-    let (w, h) = (width as f32, height as f32);
-
-    match shape.kind {
-        concat_scene::ShapeKind::Rect => {
-            let inset = ((shape.stroke_width / 2.0) as f32).clamp(0.0, w.min(h) / 2.0);
-            if let Some(fill) = paint(shape.fill)
-                && let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h)
-            {
-                let mut builder = PathBuilder::new();
-                builder.push_rect(rect);
-                if let Some(path) = builder.finish() {
-                    pixmap.fill_path(
-                        &path,
-                        &fill,
-                        FillRule::Winding,
-                        tiny_skia::Transform::identity(),
-                        None,
-                    );
-                }
-            }
-            if let Some(stroke_paint) = paint(shape.stroke)
-                && let Some(rect) = tiny_skia::Rect::from_xywh(
-                    inset,
-                    inset,
-                    (w - inset * 2.0).max(1.0),
-                    (h - inset * 2.0).max(1.0),
-                )
-            {
-                let mut builder = PathBuilder::new();
-                builder.push_rect(rect);
-                if let Some(path) = builder.finish() {
-                    pixmap.stroke_path(
-                        &path,
-                        &stroke_paint,
-                        &Stroke {
-                            width: shape.stroke_width.max(1.0) as f32,
-                            ..Default::default()
-                        },
-                        tiny_skia::Transform::identity(),
-                        None,
-                    );
-                }
-            }
-        }
-        concat_scene::ShapeKind::Ellipse => {
-            // 四段三次贝塞尔的内切椭圆；k 是让贝塞尔最贴近圆弧的系数。
-            let (hw, hh) = (w / 2.0, h / 2.0);
-            let k = 0.5523_f32;
-            let mut builder = PathBuilder::new();
-            builder.move_to(w, hh);
-            builder.cubic_to(w, hh - hh * k, hw + hw * k, 0.0, hw, 0.0);
-            builder.cubic_to(hw - hw * k, 0.0, 0.0, hh - hh * k, 0.0, hh);
-            builder.cubic_to(0.0, hh + hh * k, hw - hw * k, h, hw, h);
-            builder.cubic_to(hw + hw * k, h, w, hh + hh * k, w, hh);
-            builder.close();
-            if let Some(path) = builder.finish() {
-                if let Some(fill) = paint(shape.fill) {
-                    pixmap.fill_path(
-                        &path,
-                        &fill,
-                        FillRule::Winding,
-                        tiny_skia::Transform::identity(),
-                        None,
-                    );
-                }
-                if let Some(stroke_paint) = paint(shape.stroke) {
-                    pixmap.stroke_path(
-                        &path,
-                        &stroke_paint,
-                        &Stroke {
-                            width: shape.stroke_width.max(1.0) as f32,
-                            ..Default::default()
-                        },
-                        tiny_skia::Transform::identity(),
-                        None,
-                    );
-                }
-            }
-        }
-        concat_scene::ShapeKind::Line => {
-            let mut builder = PathBuilder::new();
-            builder.move_to(0.0, h / 2.0);
-            builder.line_to(w, h / 2.0);
-            if let Some(path) = builder.finish() {
-                let paint_colour = paint(shape.stroke).or_else(|| paint(shape.fill));
-                if let Some(stroke_paint) = paint_colour {
-                    pixmap.stroke_path(
-                        &path,
-                        &stroke_paint,
-                        &Stroke {
-                            width: shape.stroke_width.max(1.0) as f32,
-                            ..Default::default()
-                        },
-                        tiny_skia::Transform::identity(),
-                        None,
-                    );
-                }
-            }
-        }
-    }
-
-    pixmap
-        .save_png(&out.with_extension("tmp"))
-        .map_err(|error| format!("无法写出形状素材 {}：{error}", out.display()))?;
+    let style = shape_style_of(shape);
+    let rendered = concat_text::render_shape(&style, width, height)
+        .map_err(|error| format!("无法渲染形状：{error}"))?;
     // 同一形状可能被预览与导出线程同时首次素材化：先写临时名再就位，
     // 避免两个句柄交错出一张撕裂的 PNG 被存在性检查永久当真。
-    std::fs::rename(out.with_extension("tmp"), out).map_err(|error| {
-        let _ = std::fs::remove_file(out.with_extension("tmp"));
+    let tmp = out.with_extension("tmp");
+    std::fs::write(&tmp, &rendered.png)
+        .map_err(|error| format!("无法写出形状素材 {}：{error}", out.display()))?;
+    std::fs::rename(&tmp, out).map_err(|error| {
+        let _ = std::fs::remove_file(&tmp);
         format!("无法就位形状素材 {}：{error}", out.display())
     })
+}
+
+/// rgba 0..=1 数组 → ShapeStyle 的 `#rrggbb[aa]` 字符串。
+fn rgba_to_hex(rgba: [f32; 4]) -> String {
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if rgba[3] < 1.0 {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            to8(rgba[0]),
+            to8(rgba[1]),
+            to8(rgba[2]),
+            to8(rgba[3])
+        )
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            to8(rgba[0]),
+            to8(rgba[1]),
+            to8(rgba[2])
+        )
+    }
+}
+
+/// `ShapeData` → `concat_text::ShapeStyle`：图形种类映射（Rect→Square、
+/// Ellipse→Circle、Line→Line），fill/stroke 转 hex，描边粗细从绝对像素
+/// 转为画布高度分数（`render_shape` 的约定）。
+fn shape_style_of(shape: &concat_scene::ShapeData) -> concat_text::ShapeStyle {
+    use concat_text::{Figure, ShapeStyle};
+    let height = shape.height.round().clamp(1.0, 4096.0).max(1.0);
+    let figure = match shape.kind {
+        concat_scene::ShapeKind::Rect => Figure::Square,
+        concat_scene::ShapeKind::Ellipse => Figure::Circle,
+        concat_scene::ShapeKind::Line => Figure::Line,
+    };
+    // render_shape 的换算：图形像素宽 = style.width × 画布高。画布就是
+    // 图形自己的像素尺寸，所以宽分数 = 宽/高。
+    ShapeStyle {
+        figure,
+        width: shape.width / height,
+        height: 1.0,
+        fill: shape.fill.map(rgba_to_hex).unwrap_or_default(),
+        stroke: shape.stroke.map(rgba_to_hex).unwrap_or_default(),
+        stroke_width: shape.stroke_width / height,
+        ..ShapeStyle::default()
+    }
 }
 
 /// 一个图层的素材落盘路径：**只认 `asset`**。渲染/预览/展开路径在这
@@ -1554,8 +1488,7 @@ mod tests {
     fn a_scene_clip_with_speed_maps_the_window_across_scene_frames() {
         use concat_project::{Command, Editor};
 
-        let dir =
-            std::env::temp_dir().join(format!("concat-studio-speed-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("concat-studio-speed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         write_asset(&dir, "bg.png");
@@ -1626,7 +1559,10 @@ mod tests {
             .iter()
             .find(|clip| clip.scene_id.as_deref() == Some("sc1"))
             .expect("the scene clip");
-        assert!((clip.duration - 0.75).abs() < 0.1, "2× speed halves the window");
+        assert!(
+            (clip.duration - 0.75).abs() < 0.1,
+            "2× speed halves the window"
+        );
         assert!(
             (image_clips[0].duration - clip.duration).abs() < 0.1,
             "expansion covers exactly the clip's window"

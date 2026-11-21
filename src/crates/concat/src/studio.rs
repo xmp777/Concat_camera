@@ -3141,13 +3141,7 @@ impl Studio {
                     .filter(|clip| clip.kind == model::ClipKind::Scene)
                     .filter_map(|clip| {
                         clip.scene_id.clone().map(|id| {
-                            (
-                                id,
-                                clip.start,
-                                clip.duration,
-                                clip.source_start,
-                                clip.speed,
-                            )
+                            (id, clip.start, clip.duration, clip.source_start, clip.speed)
                         })
                     })
                     .collect()

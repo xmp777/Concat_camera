@@ -1556,9 +1556,9 @@ dependencies = [
  "concat-media",
  "concat-project",
  "concat-scene",
+ "concat-text",
  "image",
  "serde_json",
- "tiny-skia 0.12.0",
 ]
 
 [[package]]
