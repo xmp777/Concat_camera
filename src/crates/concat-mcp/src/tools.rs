@@ -700,6 +700,10 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
                     "type": "string",
                     "description": "Path to a concat-scene JSON file.",
                 },
+                "sceneId": {
+                    "type": "string",
+                    "description": "Which scene of a multi-scene document to render; defaults to the first.",
+                },
                 "output": {
                     "type": "string",
                     "description": "MP4 file to write.",
@@ -994,7 +998,13 @@ fn scene_render(
     }
     ensure_writable(std::path::Path::new(&output), roots)?;
 
-    let scene = concat_studio::load_scene(std::path::Path::new(&scene_path))
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(&scene_path)
+            .map_err(|error| invalid(&format!("cannot read {scene_path}: {error}")))?,
+    )
+    .map_err(|error| invalid(&format!("场景 JSON 无效：{error}")))?;
+    let scene_id = take_string(fields, "sceneId")?;
+    let scene = concat_studio::read_scene_by_id(&document, scene_id.as_deref())
         .map_err(|error| invalid(&error))?;
     let scene_dir = std::path::Path::new(&scene_path)
         .parent()
