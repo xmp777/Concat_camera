@@ -72,9 +72,12 @@ pub(super) fn apply(
                 if let Ok(previous) = existing
                     && previous == value
                 {
+                    // Nothing changes, so no undo step: `applied: true`
+                    // here would push a snapshot whose restore is a
+                    // no-op and clear the redo stack for nothing.
                     return Ok(Outcome {
                         created_id: None,
-                        applied: true,
+                        applied: false,
                     });
                 }
                 let map = project
@@ -450,6 +453,35 @@ mod tests {
         // The legacy mirror still names the first scene.
         assert_eq!(scene_of(editor.project()).id, "sc1");
         let _ = first_id;
+    }
+
+    /// The same scene again is no clip and no step: the map entry is
+    /// already identical, and a phantom undo step would only clear the
+    /// redo stack for nothing. The fixture holds the first insert, so
+    /// the apply below re-inserts the scene it carries.
+    #[test]
+    fn re_inserting_the_same_scene_changes_nothing() {
+        let (mut editor, _id, scene) = editor_with_scene();
+        let again = editor
+            .apply(Command::AddSceneClip {
+                track_id: None,
+                above: false,
+                start: 0.0,
+                scene: scene.clone(),
+                name: None,
+            })
+            .unwrap();
+        assert!(!again.applied, "the same scene again is not a step");
+        assert_eq!(again.created_id, None);
+        assert_eq!(editor.project().active().clips.len(), 1);
+        // One undo step only - the first insert. With the phantom step
+        // the bug pushed, this first undo would restore an identical
+        // document and the clip would survive it.
+        assert!(editor.undo());
+        assert_eq!(editor.project().active().clips.len(), 0);
+        // And the redo stack survived the no-op apply.
+        assert!(editor.redo());
+        assert_eq!(editor.project().active().clips.len(), 1);
     }
 
     /// A camera key comes off at the frame it was put on, and taking one

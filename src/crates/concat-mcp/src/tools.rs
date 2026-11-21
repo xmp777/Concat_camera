@@ -89,6 +89,9 @@ pub enum Action {
     Mask,
     /// `preview.frame`, as an image.
     PreviewFrame,
+    /// `scene_to_timeline`: reads a scene file and places it as a clip on
+    /// the open project's timeline.
+    SceneToTimeline,
 }
 
 /// How a reply is shown to the agent.
@@ -531,11 +534,20 @@ pub fn catalogue() -> Vec<Tool> {
         Tool {
             name: "scene_get",
             title: "Read a 2D scene",
-            description: "Reads a scene: world size, output frame, fps, duration, layers and camera keyframes.",
+            description: "Reads the scene's layers, camera keys and duration from a scene file (bare scene JSON or a Concat project document).",
             read_only: true,
             destructive: false,
             idempotent: true,
             action: Action::SceneGet,
+        },
+        Tool {
+            name: "scene_to_timeline",
+            title: "Put a scene on the timeline",
+            description: "Places a 2D scene as a clip on the open project's timeline: reads the scene at `scenePath` (`sceneId` picks among a multi-scene document's scenes), embeds it into the project document, and places a scene clip at `start` seconds (or the first free track). The scene plays over the clip's span; the camera, layers and render all come from the scene file. Requires a project to be open.",
+            read_only: false,
+            destructive: false,
+            idempotent: false,
+            action: Action::SceneToTimeline,
         },
         Tool {
             name: "preview_frame",
@@ -702,7 +714,7 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
                 },
                 "sceneId": {
                     "type": "string",
-                    "description": "Which scene of a multi-scene document to render; defaults to the first.",
+                    "description": "Which scene of a multi-scene document to render; defaults to the first. An id the map lacks falls back to the document's single-`scene` field, if it has one.",
                 },
                 "output": {
                     "type": "string",
@@ -842,6 +854,18 @@ fn input_schema(schemas: &Schemas, tool: &Tool) -> Option<Value> {
             },
             "required": ["scenePath"],
         })),
+        Action::SceneToTimeline => Some(json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "The project to place the clip on." },
+                "scenePath": { "type": "string", "description": "Scene file to read (a bare scene JSON or a Concat project document)." },
+                "sceneId": { "type": "string", "description": "Which scene of the document to place; omitted picks the document's one scene or the first of the map. An id the map lacks falls back to the document's single-`scene` field, if it has one." },
+                "start": { "type": "number", "minimum": 0, "default": 0, "description": "Timeline position in seconds." },
+                "trackId": { "type": "string", "description": "Lane to place it on; omitted picks the first free lane." },
+                "above": { "type": "boolean", "default": false, "description": "When no lane is named: prefer a lane above the picture (true) or below (false)." },
+            },
+            "required": ["path", "scenePath"],
+        })),
         Action::Mask => {
             let update = schemas.command("updateClip")?;
             let mut masks = update
@@ -958,6 +982,11 @@ fn run(tool: &Tool, arguments: Value, context: Context<'_>) -> Result<Outcome, A
         Action::SceneAddLayer => scene_add_layer(arguments, &roots),
         Action::SceneCameraMove => scene_camera_move(arguments, &roots),
         Action::SceneGet => scene_get(arguments),
+        Action::SceneToTimeline => {
+            let request = scene_to_timeline(arguments)?;
+            let result = backend.call(request)?;
+            Ok(Outcome::json(summary::view(&result)))
+        }
         Action::Mask => {
             let result = backend.call(mask(arguments)?)?;
             Ok(Outcome::json(summary::view(&result)))
@@ -993,6 +1022,9 @@ fn scene_render(
         .remove("preset")
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "medium".to_owned());
+    // `sceneId` comes out before the unknown-field sweep, or the sweep
+    // would refuse every call that names it.
+    let scene_id = take_string(fields, "sceneId")?;
     if let Some(unknown) = fields.keys().next() {
         return Err(invalid(&format!("unknown field `{unknown}`")));
     }
@@ -1003,7 +1035,6 @@ fn scene_render(
             .map_err(|error| invalid(&format!("cannot read {scene_path}: {error}")))?,
     )
     .map_err(|error| invalid(&format!("场景 JSON 无效：{error}")))?;
-    let scene_id = take_string(fields, "sceneId")?;
     let scene = concat_studio::read_scene_by_id(&document, scene_id.as_deref())
         .map_err(|error| invalid(&error))?;
     let scene_dir = std::path::Path::new(&scene_path)
@@ -1296,6 +1327,48 @@ fn scene_get(mut arguments: Value) -> Result<Outcome, ApiError> {
         "scenePath": path,
         "scene": scene_summary(&scene),
     })))
+}
+
+/// `scene_to_timeline`: reads the scene (by `sceneId` when the file is a
+/// multi-scene document), builds an `AddSceneClip` request for the open
+/// project, and returns it for `backend.call` to route through the
+/// command stack — the same path the editor's own "insert into timeline"
+/// button takes.
+fn scene_to_timeline(mut arguments: Value) -> Result<Request, ApiError> {
+    let fields = arguments
+        .as_object_mut()
+        .ok_or_else(|| scene_error("the arguments are an object"))?;
+    let path = take_string(fields, "path")?.ok_or_else(|| scene_error("missing field `path`"))?;
+    let scene_path = take_string(fields, "scenePath")?
+        .ok_or_else(|| scene_error("missing field `scenePath`"))?;
+    let scene_id = take_string(fields, "sceneId")?;
+    let start = take_number(fields, "start")?.unwrap_or(0.0).max(0.0);
+    let track_id = take_string(fields, "trackId")?;
+    let above = take_bool(fields, "above")?.unwrap_or(false);
+    if let Some(unknown) = fields.keys().next() {
+        return Err(scene_error(format!("unknown field `{unknown}`")));
+    }
+
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(&scene_path)
+            .map_err(|error| scene_error(format!("cannot read {scene_path}: {error}")))?,
+    )
+    .map_err(|error| scene_error(format!("场景 JSON 无效：{error}")))?;
+    let scene =
+        concat_studio::read_scene_by_id(&document, scene_id.as_deref()).map_err(scene_error)?;
+    request(
+        "edit.apply",
+        json!({
+            "path": path,
+            "command": {
+                "op": "addSceneClip",
+                "trackId": track_id,
+                "above": above,
+                "start": start,
+                "scene": scene,
+            },
+        }),
+    )
 }
 
 fn scene_error(why: impl Into<String>) -> ApiError {
@@ -1920,6 +1993,10 @@ mod tests {
             ),
             ("scene_get", json!({ "scenePath": "/tmp/scene.json" })),
             (
+                "scene_to_timeline",
+                json!({ "path": "/tmp/Cut", "scenePath": "/tmp/scene.json", "sceneId": "s1", "start": 0.5 }),
+            ),
+            (
                 "preview_frame",
                 json!({ "path": "/tmp/Cut", "time": 1.5, "width": 320, "height": 180 }),
             ),
@@ -1978,12 +2055,16 @@ mod tests {
                 }
                 Action::PreviewFrame => request("preview.frame", sample.clone()),
                 Action::Mask => mask(sample.clone()),
-                // Scene tools are not API requests; their schemas were checked above.
+                // Scene tools are not API requests; their schemas were
+                // checked above. `scene_to_timeline` builds an
+                // `edit.apply`, but reading the scene file makes the
+                // build IO, which the sample's scratch paths can't back.
                 Action::SceneRender
                 | Action::SceneCreate
                 | Action::SceneAddLayer
                 | Action::SceneCameraMove
-                | Action::SceneGet => continue,
+                | Action::SceneGet
+                | Action::SceneToTimeline => continue,
             };
             let built = built.unwrap_or_else(|error| panic!("{name}: {error}"));
             // Back again: the request as the API writes it fits the API's

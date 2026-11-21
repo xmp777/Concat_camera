@@ -721,3 +721,142 @@ fn an_agent_draws_a_shape_layer_and_renders_it() {
     assert!((duration - 1.5).abs() < 0.2, "duration {duration}");
     agent.end();
 }
+
+#[test]
+fn an_agent_places_a_saved_scene_on_the_timeline_headless() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let home = scratch.path();
+    let mut agent = Agent::spawn(home, "headless", &[]);
+    let (_, welcome) = agent.ask(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "e2e", "version": "1" },
+        }),
+    );
+    assert_eq!(welcome["result"]["protocolVersion"], "2025-06-18");
+    agent.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+
+    let created = agent.tool(
+        "project_create",
+        json!({
+            "location": home.to_string_lossy(),
+            "name": "Scene Cut",
+            "video": { "width": 640, "height": 360, "rateNum": 30, "rateDen": 1 },
+        }),
+    );
+    assert_eq!(created["structuredContent"]["project"]["name"], "Scene Cut");
+    let path = home.join("Scene Cut").to_string_lossy().into_owned();
+
+    let scene_path = home.join("opening.json");
+    agent.tool(
+        "scene_create",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "name": "开场",
+            "worldWidth": 2000.0,
+            "worldHeight": 1125.0,
+            "width": 640,
+            "height": 360,
+            "fps": 30,
+            "durationFrames": 45,
+            "background": [0.0, 0.0, 0.0, 1.0],
+        }),
+    );
+    agent.tool(
+        "scene_add_layer",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "id": "strip",
+            "kind": "shape",
+            "shape": {
+                "kind": "rect",
+                "width": 400.0,
+                "height": 120.0,
+                "fill": [0.9, 0.3, 0.2, 1.0],
+            },
+            "x": 1000.0,
+            "y": 562.0,
+            "durationFrames": 45.0,
+        }),
+    );
+
+    // The tool hands the scene to the project's command stack, the same
+    // road the editor's own insert button drives. The project argument
+    // is `path`, like every other tool that takes one.
+    let placed = agent.tool(
+        "scene_to_timeline",
+        json!({
+            "path": path,
+            "scenePath": scene_path.to_string_lossy(),
+            "start": 0.5,
+        }),
+    );
+    let clip_id = placed["structuredContent"]["createdId"].clone();
+    assert!(clip_id.is_string(), "{placed}");
+
+    let read = agent.tool("timeline_read", json!({ "path": path }));
+    let clips = read["structuredContent"]["timeline"]["clips"]
+        .as_array()
+        .expect("clips")
+        .clone();
+    let scene_clip = clips
+        .iter()
+        .find(|clip| clip["id"] == clip_id)
+        .expect("the placed clip");
+    assert_eq!(scene_clip["kind"], "scene", "{read}");
+    assert_eq!(scene_clip["name"], "开场", "the scene lends its name");
+    assert_eq!(scene_clip["start"], 0.5, "{read}");
+    assert_eq!(scene_clip["duration"], 1.5, "45 frames at 30 fps");
+
+    // The same file again is a no-op: the scene is already on the map.
+    let again = agent.tool(
+        "scene_to_timeline",
+        json!({
+            "path": path,
+            "scenePath": scene_path.to_string_lossy(),
+            "start": 0.5,
+        }),
+    );
+    assert!(again["structuredContent"]["createdId"].is_null(), "{again}");
+    let read = agent.tool("timeline_read", json!({ "path": path }));
+    let clips = read["structuredContent"]["timeline"]["clips"]
+        .as_array()
+        .expect("clips");
+    assert_eq!(clips.len(), 1, "no second clip for the same scene: {read}");
+
+    // `sceneId` names the scene of a document: the scene file is a
+    // project document whose one scene rides under its id.
+    let scene_json: Value =
+        serde_json::from_str(&std::fs::read_to_string(&scene_path).expect("scene file"))
+            .expect("scene JSON");
+    let scene_id = scene_json["scene"]["id"].as_str().expect("scene id");
+    let output = home.join("opening.mp4");
+    agent.tool(
+        "scene_render",
+        json!({
+            "scenePath": scene_path.to_string_lossy(),
+            "sceneId": scene_id,
+            "output": output.to_string_lossy(),
+            "crf": 30,
+            "preset": "ultrafast",
+        }),
+    );
+    assert!(output.is_file(), "the sceneId render wrote the file");
+
+    // Arguments outside the schema are named, like the other tools.
+    let (_, refused) = agent.ask(
+        "tools/call",
+        json!({
+            "name": "scene_to_timeline",
+            "arguments": {
+                "path": path,
+                "scenePath": scene_path.to_string_lossy(),
+                "bogus": 1,
+            },
+        }),
+    );
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    agent.end();
+}

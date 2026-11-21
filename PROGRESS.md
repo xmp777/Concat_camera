@@ -42,7 +42,21 @@
   - [x] 10.1 `scene_render` 加 `sceneId` 参数（多场景文档按 id 渲染指定场景；schema 文档化）
   - [x] 10.2 编辑器重建 + 实机走查：多场景切换/双金色片段/面板 Frame 0/90 同步正确（截图 `docs/assets/phase10_multiscene_walkthrough.png`）
   - [x] 10.3 门禁：MCP 10 lib + 6 e2e 全绿，MSVC build 通过
+- [x] **Phase 11：MCP `scene_to_timeline`（Agent 侧时间轴闭环）**（2026-11-21，2 轮审查收敛，详见 `docs/handovers/2026-11-21-phase11-scene-to-timeline.md`）
+  - [x] 11.1 新工具 `scene_to_timeline`：场景文件 → `AddSceneClip` 请求 → 命令栈（与编辑器插入按钮同路径）；可选 `sceneId` 走 `read_scene_by_id`
+  - [x] 11.2 审查修复 3×P1：参数定名 `path`（对外接口定版前零成本窗口）；幂等分支 `applied: false`（幽灵 undo 步骤，Phase 8a 既有 bug）+ 单测；sceneId 对齐
+  - [x] 11.3 自查 P0：`scene_render` 的 `sceneId` 因参数检查顺序从未可用（Phase 10 引入、无 e2e）——take 前移 + e2e 补断言
+  - [x] 11.4 环境：LLVM_HOME 接通 MSYS2 clang（Skia/编辑器构建恢复）；Skia m153 源码预解包绕开符号链接特权限制
+  - [x] 11.5 门禁：MCP 10 lib + 7 e2e；project 268 lib + 4 doc；workspace check（除 editor/android）+ `cargo check -p concat`（Skia 全量）通过；fmt 干净
+
+## 当前队列（Phase 12 候选）
+
+- [ ] `scenes` map 读取迁移：编辑器/studio 全面走 map（旧 `scene` 单键仅作兼容）
+- [ ] sceneId 显式 id map 落空的静默回退：改报错或维持文档注明（Phase 11 审查遗留）
+- [ ] `read_scene_by_id` map-hit 路径直接测试（双场景文档）；同 id 不同值重插路径补测
+- [ ] 跟随逐帧解析深化（图层关键帧轨道就绪后自动生效，见 Phase 9 交付）
+- [ ] parallax/plan_frame_with_camera 死管道处置（待架构评审）
 
 ## 卡点记录
 
-（无）——Phase 7 熔断已恢复，Phase 9 严格审查 [REVIEW_PASSED]。
+（无）——Phase 7 熔断已恢复，Phase 9/11 审查收敛。
