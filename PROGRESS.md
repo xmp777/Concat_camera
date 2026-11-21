@@ -27,11 +27,13 @@
   - [x] 8a.1 `scenes` map（顶层键，按场景 id 存取）+ 旧单键 `scene` 读取兼容
   - [x] 8a.2 AddSceneClip 支持多场景共存（每片段绑定自己的场景）
   - [x] 8a.3 展开按 clip.scene_id 从 map 取对应场景（含 per-clip viewport/fps/背景色）
-  - [ ] 8b 场景选择器 UI（面板/菜单，后续阶段）
-- [x] **Phase 8b：场景选择器 UI**（2026-11-21，已推送 2b8a3a8d）
+  - [x] **Phase 8b：场景选择器 UI**（2026-11-21，已推送 2b8a3a8d）
   - [x] 8b.1 Scene 面板切换：Select 下拉列出工程场景，切到 id 对应场景并重渲染
   - [x] 8b.2 scene.pick i18n 键（26 locale）
-- [ ] Phase 9：跟随逐帧解算 + 场景片段 speed/裁剪语义
+- [x] **Phase 9：场景片段 trim/speed 语义 + 跟随逐帧映射**（2026-11-21，[REVIEW_PASSED]）
+  - [x] 9.1 展开窗口改为场景帧区间（source_start×fps 起，speed 缩放流速）；面板映射同公式（4 元组）
+  - [x] 9.2 跟随逐帧确认：相机键烘焙已按帧采样 plan_layers，目标图层逐帧解算结构成立
+  - [x] 9.3 外部审查 W1/W2/W3 修复：判别性 head-trim/speed 测试、死变量清理、日志 untrack
 
 ## 卡点记录
 
