@@ -61,11 +61,11 @@
 
 ## 当前队列（Phase 14 候选）
 
+- [ ] 编辑器 UI：Scene 面板实机走查（13.2 接线后插入含形状场景的端到端确认）——**素材已就绪**（`.walkthrough/`：场景 `opening.json` 含形状层 + 工程 `走查工程/`），待机器空闲时执行：`concat.exe .walkthrough/走查工程` 启动 → Scene 面板打开 `opening.json` → 插入时间轴 → 断言 `走查工程/assets/scene-shapes/61808269636e7950.png` 落盘 + 时间轴金色片段 + 截图
 - [ ] 图片图层相对 asset 随嵌入迁移 / carry 源缺失 warning 化
 - [ ] expand 两类回退区分（clip 无 id 合理回退 vs id 落空跳过+日志，需日志设施决策）
 - [ ] 跟随逐帧解析深化（图层关键帧轨道就绪后自动生效，见 Phase 9 交付）
 - [ ] parallax/plan_frame_with_camera 死管道处置（待架构评审）
-- [ ] 编辑器 UI：Scene 面板实机走查（13.2 接线后插入含形状场景的端到端确认）
 
 ## 卡点记录
 
