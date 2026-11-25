@@ -253,7 +253,7 @@ git push origin main
 
 ---
 
-## 10. 当前进度（2026-11-25）
+## 10. 当前进度（2026-11-26）
 
 | 项 | 状态 |
 |---|---|
@@ -265,12 +265,12 @@ git push origin main
 | Phase 5 Scene 片段 + Camera 检查器 | ✅ Scene 片段（本地时间/命令化拖拽/插入时间轴）+ Inspector 相机区 + 预览/导出统一展开；两轮审查 P0 全清 |
 | Phase 6–13 | ✅ 已完成，详见 `PROGRESS.md` 与 `docs/handovers/` |
 | Phase 14 前置基线 | ✅ 可复现走查 fixture、文档入口与 host export 音频漂移修复已完成 |
-| Phase 14 编辑器形状 carry 实机走查 | ⬜ 待执行 |
+| Phase 14 编辑器形状 carry 实机走查 | ✅ 插入、PNG 字节级搬运、map/legacy 镜像、undo/redo、幂等重插、保存重开与截图均通过 |
 | Phase 15 图片资产 carry / 缺源 warning | ⬜ 待开始 |
 | Phase 16 expand 两类回退统一 | ⬜ 待开始 |
 | Phase 17 相机死管道清理 / 跟随逐帧架构评审 | ⬜ 待开始 |
 
-**下一步建议**：实机走查含形状场景的插入、undo/redo、保存重开；之后推进图片资产 carry 与 expand 语义统一。
+**下一步建议**：推进图片资产 carry 与缺源 warning；随后统一 expand 语义并补日志。
 
 ---
 

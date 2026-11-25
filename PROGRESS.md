@@ -59,16 +59,14 @@
   - [x] 13.3 legacy `scene` 镜像统一：AddSceneClip 移动 map 时总刷新镜像（对齐 write_scene；幂等早退不盲修外部陈旧镜像，注释写明）
   - [x] 13.4 门禁：studio 15 lib；project 269 lib + 4 doc；MCP 11 lib + 7 e2e；editor 245 lib；fmt 干净
 
-## 当前队列（Phase 14）
+## 当前队列
 
-- [x] **Phase 14 前置基线**（2026-11-25，[REVIEW_PASSED]，详见 `docs/handovers/2026-11-25-phase14-preflight.md`）
-  - [x] 最小走查 fixture 入库：含形状层的 `opening.json`、内容寻址 PNG、空白工程模板；recents/opened/lock/生成资产保持忽略
-  - [x] 交接与 SOP 入口更新到 Phase 0–13 完成、Phase 14 待实机走查的真实状态
-  - [x] host export 音频漂移定位并修复：B 帧重排导致 `Feed.end` 回退，24 fps 音频由 6s 缩短至 5.931s；改为单调最大值，七种帧率回归通过
-  - [x] 门禁：fmt/check 通过；media audio 36、host export 27 全绿；两项既有硬件码率测试失败单独记录
-- [ ] 编辑器 UI：Scene 面板实机走查（13.2 接线后插入含形状场景的端到端确认）——**素材已就绪**（`.walkthrough/`：场景 `opening.json` 含形状层 + 工程 `走查工程/`），待机器空闲时执行：`concat.exe .walkthrough/走查工程` 启动 → Scene 面板打开 `opening.json` → 插入时间轴 → 断言 `走查工程/assets/scene-shapes/61808269636e7950.png` 落盘 + 时间轴金色片段 + 截图
-- [ ] 图片图层相对 asset 随嵌入迁移 / carry 源缺失 warning 化
-- [ ] expand 两类回退区分（clip 无 id 合理回退 vs id 落空跳过+日志，需日志设施决策）
+- [x] **Phase 14：编辑器形状资产 carry 实机走查**（2026-11-26，[REVIEW_PASSED]，详见 `docs/handovers/2026-11-26-phase14-ui-walkthrough.md`）
+  - [x] 14.1 前置基线：最小 fixture 入库、文档入口更新、host export 音频漂移修复（2026-11-25，详见 `docs/handovers/2026-11-25-phase14-preflight.md`）
+  - [x] 14.2 真实 Windows 编辑器闭环：Scene 面板打开 `opening.json`、红色形状预览、插入 2 秒金色 Scene 片段、PNG 字节级搬运、map/legacy 镜像、undo/redo、幂等重插无幽灵历史、保存重开恢复
+  - [x] 14.3 证据与门禁：截图 `docs/assets/phase14_windows_walkthrough.png`；fmt、project Scene 8、studio carry 2、editor 245 全绿
+- [ ] **Phase 15：图片图层相对 asset 随嵌入迁移 / carry 源缺失 warning 化**
+- [ ] Phase 16：expand 两类回退区分（clip 无 id 合理回退 vs id 落空跳过+日志，需日志设施决策）
 - [ ] 跟随逐帧解析深化（图层关键帧轨道就绪后自动生效，见 Phase 9 交付）
 - [ ] parallax/plan_frame_with_camera 死管道处置（待架构评审）
 

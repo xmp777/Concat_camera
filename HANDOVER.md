@@ -1,9 +1,9 @@
 # Concat_camera 交接单
 
-> 最后更新：2026-11-25
+> 最后更新：2026-11-26
 > 仓库：`G:\Projects\Concat_camera`（fork of `jub0t/Concat`，AGPL-3.0-or-later）
 > 远程：`origin` = `xmp777/Concat_camera`，`upstream` = `jub0t/Concat`
-> 当前：Phase 0–13 已完成；Phase 14 前置基线已建立，实机验收尚未完成。
+> 当前：Phase 0–14 已完成；下一阶段为 Phase 15 图片资产 carry 与缺源 warning。
 
 ## 快速上手
 
@@ -22,9 +22,9 @@ Cargo workspace 在 `src/`，不在仓库根。阶段状态以 `PROGRESS.md` 为
 
 ## 当前状态
 
-- Phase 0–13：已完成，阶段稳定基线为 `50fbcfa3`。
+- Phase 0–13：已完成，阶段稳定基线为 `50fbcfa3`；Phase 14.1 音频修复基线为 `4ddc1074`。
 - 多场景容器、严格 `read_scene_by_id`、形状资产物化/搬运、编辑器插入接线、`AddSceneClip` 幂等与 legacy 镜像统一均已落地。
-- Phase 14 尚未实机走查；`.walkthrough/` 提供含形状层的 `opening.json`、源 PNG 和空白工程模板。
+- Phase 14 实机走查已完成：Scene 预览、2 秒金色片段、PNG 字节级搬运、map/legacy 镜像、undo/redo、幂等重插与保存重开均通过；截图见 `docs/assets/phase14_windows_walkthrough.png`，证据见 `docs/handovers/2026-11-26-phase14-ui-walkthrough.md`。
 - host export 音频漂移已定位并修复：B 帧重排曾让 mux 的流结尾时间回退，24 fps 成片音频缩短至 5.931s；`Feed.end` 改为单调最大值，七种帧率回归均通过。
 - 图片图层相对 asset 尚未随嵌入迁移，缺源仍可能静默跳过。
 - `expand_project_scenes` 仍保留显式 id 落空回退，待统一严格语义并补日志。
@@ -33,10 +33,9 @@ Cargo workspace 在 `src/`，不在仓库根。阶段状态以 `PROGRESS.md` 为
 
 ## 下一步
 
-1. 实机走查：打开 `.walkthrough/opening.json` → 插入时间轴 → 断言 PNG 落盘、金色片段、undo/redo、保存重开 → 截图。
-2. 推进图片资产 carry / 缺源 warning。
-3. 统一 expand 两类回退并补日志。
-4. 清理相机死管道，完成跟随逐帧与 parallax 架构评审；本轮不实现 parallax。
+1. 推进图片资产 carry / 缺源 warning（Phase 15）。
+2. 统一 expand 两类回退并补日志（Phase 16）。
+3. 清理相机死管道，完成跟随逐帧与 parallax 架构评审；本轮不实现 parallax。
 
 ## 关键路径
 
