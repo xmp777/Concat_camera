@@ -8,7 +8,7 @@
 
 ## 0. 先读这三份文档（顺序）
 
-1. **`docs/HANDOVER.md`** — 当前进度、Git 状态、已验证命令、踩坑。
+1. **`HANDOVER.md`** — 当前进度、Git 状态、已验证命令、踩坑。
 2. **`docs/CAMERA_DESIGN.md`** — 摄像机/场景数学、坐标约定、已知限制、P1/P2 方案。
 3. **`项目任务书.md`**（本仓库 `docs/PROJECT_BRIEF.md`）— 目标与阶段要求。
 
@@ -40,7 +40,7 @@ cmd.exe /c "call `"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTool
 
 ```
 G:\Projects\Concat_camera\
-├─ docs/                  # 设计文档（CAMERA_DESIGN、HANDOVER、PROJECT_BRIEF、SOP 等）
+├─ docs/                  # 设计文档（CAMERA_DESIGN、PROJECT_BRIEF、SOP、handovers 等）
 ├─ examples/camera_demo/  # 场景 JSON + 测试素材（输出 out.mp4 已被 gitignore）
 ├─ deps/ffdl/             # FFmpeg 8.1（bin/lib/include）
 ├─ onnxruntime-win-x64-1.28.0/
@@ -253,7 +253,7 @@ git push origin main
 
 ---
 
-## 10. 当前进度（2026-11-20）
+## 10. 当前进度（2026-11-25）
 
 | 项 | 状态 |
 |---|---|
@@ -263,16 +263,20 @@ git push origin main
 | Phase 3 MCP | ✅ 核心完成（`scene_create/add_layer/camera_move/get/render` + 工程持久化 + e2e） |
 | Phase 4 Slint UI | ✅ 场景视口 + 编辑器 `Scene` 面板；原生 playhead 驱动 |
 | Phase 5 Scene 片段 + Camera 检查器 | ✅ Scene 片段（本地时间/命令化拖拽/插入时间轴）+ Inspector 相机区 + 预览/导出统一展开；两轮审查 P0 全清 |
-| Phase 6 资产/ASR | ⬜ 未开始 |
-| Phase 7 网络/AI | ⬜ 未开始 |
+| Phase 6–13 | ✅ 已完成，详见 `PROGRESS.md` 与 `docs/handovers/` |
+| Phase 14 前置基线 | ✅ 可复现走查 fixture、文档入口与 host export 音频漂移修复已完成 |
+| Phase 14 编辑器形状 carry 实机走查 | ⬜ 待执行 |
+| Phase 15 图片资产 carry / 缺源 warning | ⬜ 待开始 |
+| Phase 16 expand 两类回退统一 | ⬜ 待开始 |
+| Phase 17 相机死管道清理 / 跟随逐帧架构评审 | ⬜ 待开始 |
 
-**下一步建议**：人工走查 scene-demo（拖相机/插入/导出/undo；确认 Scene 面板图片显示）→ Session 级展开缓存 → 图形图层素材化 → 多场景（`scenes` map）→ 跟随逐帧解算 → parallax（stash 待清）。
+**下一步建议**：实机走查含形状场景的插入、undo/redo、保存重开；之后推进图片资产 carry 与 expand 语义统一。
 
 ---
 
 ## 11. 给后续弱模型的使用说明
 
-- **先读** `docs/HANDOVER.md` 和 `docs/CAMERA_DESIGN.md`，再读本 SOP。
+- **先读** `HANDOVER.md`、`PROGRESS.md` 和 `docs/CAMERA_DESIGN.md`，再读本 SOP。
 - **不要重新设计**：遇到"该不该换个方案"的问题，默认按本 SOP 做；发现方案确实不可行时，才在文档里记录原因并提出替代。
 - **小步**：每次只改一个点，改完立刻 `cargo check` + `cargo test`。
 - **可回退**：每完成一个独立改动就 commit；不确定的实验放 `git stash`（带消息）。

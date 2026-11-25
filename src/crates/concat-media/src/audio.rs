@@ -1532,7 +1532,9 @@ impl<'a> Feed<'a> {
         if let Some(ticks) = packet.pts().or(packet.dts())
             && let Some(end) = ffi::seconds(ticks + packet.duration(), self.from)
         {
-            self.end = end;
+            // B frames are written in decode order, so the last packet's
+            // presentation time can be earlier than one already written.
+            self.end = self.end.max(end);
         }
         packet.set_stream(self.stream);
         packet.rescale_ts(self.from, self.to);

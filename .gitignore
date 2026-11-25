@@ -77,3 +77,12 @@ examples/scene_demo/scene-demo/out*.mp4
 examples/scene_demo/scene-demo/frame_check.png
 *.log
 *_err*.log
+
+# Phase 14 walkthrough runtime state. The source scene, PNG and blank
+# project template stay tracked; machine-specific recents and generated
+# project assets do not.
+.walkthrough/**/AppData/
+.walkthrough/**/concat.opened.json
+.walkthrough/**/concat.lock
+.walkthrough/走查工程/assets/
+.walkthrough/走查工程/out*.mp4

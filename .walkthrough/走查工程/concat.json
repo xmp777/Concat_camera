@@ -1,0 +1,10 @@
+{
+  "concat": "0.2.12",
+  "name": "走查工程",
+  "video": {
+    "width": 640,
+    "height": 360,
+    "rateNum": 30,
+    "rateDen": 1
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "activeTimelineId": "TL1",
+  "clips": [],
+  "concat": "0.1.0",
+  "fonts": [],
+  "media": [],
+  "name": "走查场景",
+  "scene": {
+    "background": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "camera": {
+      "keys": [
+        {
+          "easing": {
+            "x1": 0.42,
+            "x2": 0.58,
+            "y1": 0.0,
+            "y2": 1.0
+          },
+          "frame": 0.0,
+          "pose": {
+            "rotation": 0.0,
+            "viewport_height": 360,
+            "viewport_width": 640,
+            "x": 1000.0,
+            "y": 562.5,
+            "zoom": 1.0
+          }
+        }
+      ]
+    },
+    "duration_frames": 60.0,
+    "id": "走查场景",
+    "layers": [
+      {
+        "asset": "assets/scene-shapes/61808269636e7950.png",
+        "duration_frames": 60.0,
+        "id": "badge",
+        "in_frame": 0.0,
+        "kind": "shape",
+        "name": "badge",
+        "opacity": 1.0,
+        "shape": {
+          "fill": [
+            0.8999999761581421,
+            0.30000001192092896,
+            0.20000000298023224,
+            1.0
+          ],
+          "height": 150.0,
+          "kind": "rect",
+          "stroke_width": 0.0,
+          "width": 300.0
+        },
+        "transform": {
+          "rotation_deg": 0.0,
+          "scale": 1.0,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "x": 1000.0,
+          "y": 562.0
+        },
+        "visible": true,
+        "z": 0
+      }
+    ],
+    "name": "走查场景",
+    "rate_den": 1,
+    "rate_num": 30,
+    "world_height": 1125.0,
+    "world_width": 2000.0
+  },
+  "timelines": [
+    {
+      "clips": [],
+      "id": "TL1",
+      "name": "Timeline 1",
+      "tracks": [
+        {
+          "id": "T1",
+          "muted": false,
+          "visible": true
+        },
+        {
+          "id": "T2",
+          "muted": false,
+          "visible": true
+        },
+        {
+          "id": "T3",
+          "muted": false,
+          "visible": true
+        },
+        {
+          "id": "T4",
+          "muted": false,
+          "visible": true
+        }
+      ],
+      "video": {
+        "height": 360,
+        "rateDen": 1,
+        "rateNum": 30,
+        "width": 640
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "id": "T1",
+      "muted": false,
+      "visible": true
+    },
+    {
+      "id": "T2",
+      "muted": false,
+      "visible": true
+    },
+    {
+      "id": "T3",
+      "muted": false,
+      "visible": true
+    },
+    {
+      "id": "T4",
+      "muted": false,
+      "visible": true
+    }
+  ],
+  "version": 2,
+  "video": {
+    "height": 360,
+    "rateDen": 1,
+    "rateNum": 30,
+    "width": 640
+  }
+}
